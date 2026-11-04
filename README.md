@@ -42,11 +42,22 @@ CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长�
 
 首次运行自动生成，CLI 参数会覆盖并回写。
 
+**这个文件属于本机配置，不进版本库**（`.gitignore` 已包含）。原因见 `javaPath`：它通常是本机 JDK 的绝对路径，对别人没意义，也不该出现在提交里。仓库里跟踪的是模板 `worldgen.config.example.json`，字段与默认值一致，需要查字段时看它。
+
+`javaPath` 留 `null` 就走 PATH 里的 `java`；只有 PATH 上的 java 版本不对（比如系统装的是 JDK 11，跑不了 26.x）时才需要填绝对路径。这一项填了就别让这个文件回到 git 里。
+
 ```jsonc
 {
   "minecraft": { "version": "26.3", "loader": null },   // null = installer 的 latest
-  "server": { "dir": ".server/{version}", "memoryMB": 2048, "levelName": "world", "seed": "" },
-  "mods": { "chunky": true, "c2me": true, "fabricApi": true, "c2meThreads": 4 },
+  "server": {
+    "dir": ".server/{version}", "memoryMB": 2048,
+    "javaPath": null,                                     // null = 用 PATH 里的 java
+    "levelName": "world", "seed": ""
+  },
+  "mods": {
+    "chunky": true, "c2me": true, "fabricApi": true,
+    "c2meThreads": 4, "c2mePriority": null                 // null = 不干预 c2me 的 threadPoolPriorityPreset
+  },
   "pregen": { "dimension": "overworld", "shape": "circle", "center": [0, 0], "radius": 256 },
   "analyze": {
     "range": "pregen",          // pregen = 用预生成记录的范围；all = 全量
@@ -128,3 +139,17 @@ stats/2026-11-04T03-12-45-123Z/
 - 服务端目录按版本隔离：`.server/26.3/`、`.server/26.2/`，各自带 world、mods、config、日志。
 - 切版本只需 `--version 26.2`（或改配置），不会污染已有版本的世界与模组。
 - 删掉整个 `.server/<version>/` 即可回收该版本的全部产物。
+
+## 旧版本（1.16 / 1.17）：自定义世界生成数据包
+
+1.16 / 1.17 的服务端在首次创建世界时就把世界生成设置固定进 `level.dat`，之后再改数据包不会影响已生成的内容。用世界生成数据包（worldgen datapack）时必须按下面的顺序手工操作：
+
+1. 先把数据包放进服务端目录（服务端根目录的 `datapacks/`，或世界目录下的 `datapacks/`）。
+2. 带数据包启动一次服务端，让它完成首次世界创建。`setup` 的首启正好是这一步；如果用了 `--no-boot`，需要自己起一次。
+3. 停服，清掉世界里的区块数据：
+   - `<levelName>/region`、`<levelName>/poi`、`<levelName>/entities`
+   - 下界 / 末地的 `DIM-1`、`DIM1` 目录（1.16 / 1.17 是这种旧布局，目录里同样有 region / poi / entities）
+   - `level.dat` 不在清理范围
+4. 再启动服务端，区块按数据包重新生成，此时才能开始 `pregen`。
+
+这段清理工具不会自动执行：1.16 / 1.17 已超出主线支持范围，为老版本加分支不划算，所以只作为使用说明记录在这里。`<levelName>` 即 `server.levelName`，默认 `world`。

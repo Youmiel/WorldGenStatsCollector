@@ -76,7 +76,7 @@ async function cmdSetup(cfg: Config, args: Args): Promise<InstalledServer> {
 
   if (!args["no-boot"]) {
     // 首启：生成 c2me.toml / chunky 配置，并验证服务端确实能起来
-    const server = new MinecraftServer({ dir: srv.dir, launcher: srv.launcher, memoryMB: cfg.server.memoryMB, javaArgs: cfg.server.javaArgs, logPath: serverLogPath(srv.dir) })
+    const server = new MinecraftServer({ dir: srv.dir, launcher: srv.launcher, memoryMB: cfg.server.memoryMB, javaPath: cfg.server.javaPath, javaArgs: cfg.server.javaArgs, logPath: serverLogPath(srv.dir) })
     try {
       log.info("首次启动以生成配置（不预生成）…")
       await server.start()
@@ -86,7 +86,7 @@ async function cmdSetup(cfg: Config, args: Args): Promise<InstalledServer> {
       log.error(`服务端启动失败，见 ${serverLogPath(srv.dir)}`)
       throw e
     }
-    await tuneC2me(srv.dir, cfg.mods.c2meThreads)
+    await tuneC2me(srv.dir, cfg.mods.c2meThreads, cfg.mods.c2mePriority)
     await tuneChunky(srv.dir, { updateInterval: 3 })
     log.info(`服务端配置：${srv.dir}`)
   }
@@ -102,12 +102,13 @@ async function loadServer(cfg: Config): Promise<InstalledServer> {
 
 async function cmdPregen(cfg: Config): Promise<void> {
   const srv = await loadServer(cfg)
-  await tuneC2me(srv.dir, cfg.mods.c2meThreads)
+  await tuneC2me(srv.dir, cfg.mods.c2meThreads, cfg.mods.c2mePriority)
   await tuneChunky(srv.dir, { updateInterval: 3 })
   const server = new MinecraftServer({
     dir: srv.dir,
     launcher: srv.launcher,
     memoryMB: cfg.server.memoryMB,
+    javaPath: cfg.server.javaPath,
     javaArgs: cfg.server.javaArgs,
     logPath: serverLogPath(srv.dir),
   })

@@ -150,8 +150,9 @@ export async function installServer(root: string, cfg: Config, opts: { installer
   const args = ["-jar", opts.installer, "server", "-dir", dir, "-mcversion", cfg.minecraft.version, "-downloadMinecraft"]
   if (cfg.minecraft.loader) args.push("-loader", cfg.minecraft.loader)
 
+  const java = cfg.server.javaPath ?? "java"
   log.info(`安装 Fabric 服务端 MC ${cfg.minecraft.version} …（首次需下载原版服务端，耗时较长）`)
-  const r = await run("java", args, { cwd: root, echo: true })
+  const r = await run(java, args, { cwd: root, echo: true })
   if (r.code !== 0) throw new Error(`fabric-installer 失败 (code ${r.code})\n${r.stdout}\n${r.stderr}`)
 
   const launcher = await findLauncher(dir)

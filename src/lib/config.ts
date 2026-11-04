@@ -20,6 +20,8 @@ export interface Config {
   server: {
     dir: string
     memoryMB: number
+    /** java 可执行文件绝对路径；null 表示用 PATH 里的 java */
+    javaPath: string | null
     levelName: string
     seed: string
     levelType: string
@@ -33,6 +35,8 @@ export interface Config {
     fabricApi: boolean
     /** c2me 线程数覆盖；null 表示沿用 mod 自动生成的值 */
     c2meThreads: number | null
+    /** c2me threadPoolPriorityPreset（LOW / NORMAL / HIGH 等）；null 表示不干预 */
+    c2mePriority: string | null
   }
   pregen: {
     dimension: string
@@ -65,6 +69,7 @@ export const DEFAULT_CONFIG: Config = {
   server: {
     dir: ".server/{version}",
     memoryMB: 2048,
+    javaPath: null,
     levelName: "world",
     seed: "",
     levelType: "minecraft:normal",
@@ -72,7 +77,7 @@ export const DEFAULT_CONFIG: Config = {
     simulationDistance: 6,
     javaArgs: ["-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200", "-Dfile.encoding=UTF-8"],
   },
-  mods: { chunky: true, c2me: true, fabricApi: true, c2meThreads: 4 },
+  mods: { chunky: true, c2me: true, fabricApi: true, c2meThreads: 4, c2mePriority: null },
   pregen: { dimension: "overworld", shape: "circle", center: [0, 0], radius: 256, timeoutMinutes: 60, settleSeconds: 5 },
   analyze: {
     range: "pregen",

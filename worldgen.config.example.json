@@ -6,6 +6,7 @@
   "server": {
     "dir": ".server/{version}",
     "memoryMB": 2048,
+    "javaPath": null,
     "levelName": "world",
     "seed": "",
     "levelType": "minecraft:normal",
@@ -21,7 +22,8 @@
     "chunky": true,
     "c2me": true,
     "fabricApi": true,
-    "c2meThreads": 4
+    "c2meThreads": 4,
+    "c2mePriority": null
   },
   "pregen": {
     "dimension": "overworld",

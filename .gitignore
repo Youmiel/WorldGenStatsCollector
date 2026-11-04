@@ -5,3 +5,6 @@ stats/
 .cache/
 *.log
 /ref/
+
+# 本机配置
+worldgen.config.json

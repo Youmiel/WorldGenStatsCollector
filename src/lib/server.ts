@@ -110,7 +110,7 @@ export async function tuneChunky(serverDir: string, opts: { updateInterval?: num
  * c2me 的 config/c2me.toml 只有首次启动后才会有。
  * 这里只改已存在的键，避免把未知键写坏。
  */
-export async function tuneC2me(serverDir: string, threads: number | null): Promise<boolean> {
+export async function tuneC2me(serverDir: string, threads: number | null, priority: string | null): Promise<boolean> {
   const p = join(serverDir, "config", "c2me.toml")
   if (!(await exists(p))) return false
   let text = await readFile(p, "utf8")
@@ -122,12 +122,15 @@ export async function tuneC2me(serverDir: string, threads: number | null): Promi
     text = text.replace(/^(\s*defaultGlobalExecutorParallelismExpression\s*=\s*).*$/m, `$1"${threads}"`)
     if (text !== before) changed = true
   }
-  const beforePriority = text
-  text = text.replace(/^(\s*threadPoolPriorityPreset\s*=\s*).*$/m, `$1"LOW"`)
-  if (text !== beforePriority) changed = true
+  if (priority !== null) {
+    const before = text
+    // 小机器/ARM 上设 LOW 让出 CPU，桌面多核机器可以 HIGH
+    text = text.replace(/^(\s*threadPoolPriorityPreset\s*=\s*).*$/m, `$1"${priority}"`)
+    if (text !== before) changed = true
+  }
   if (changed) {
     await writeFile(p, text, "utf8")
-    log.info(`c2me 调整：parallelism=${threads ?? "default"}, priority=LOW`)
+    log.info(`c2me 调整：parallelism=${threads ?? "default"}, priority=${priority ?? "default"}`)
   }
   return true
 }
@@ -143,7 +146,7 @@ export class MinecraftServer {
   private exited = false
   readonly logPath: string
 
-  constructor(private opts: { dir: string, launcher: string, memoryMB: number, javaArgs: string[], logPath: string }) {
+  constructor(private opts: { dir: string, launcher: string, memoryMB: number, javaPath?: string | null, javaArgs: string[], logPath: string }) {
     this.logPath = opts.logPath
   }
 
@@ -152,14 +155,17 @@ export class MinecraftServer {
   async start(): Promise<void> {
     await ensureDir(this.opts.dir)
     const file = createWriteStream(this.logPath, { flags: "a" })
+    const java = this.opts.javaPath ?? "java"
+    // 预生成是持续满载任务，Xms 给得太小会让堆反复扩容；小堆直接拉满，大堆从 2G 起步
+    const xms = Math.min(this.opts.memoryMB, 2048)
     const args = [
-      `-Xms${Math.min(512, this.opts.memoryMB)}M`,
+      `-Xms${xms}M`,
       `-Xmx${this.opts.memoryMB}M`,
       ...this.opts.javaArgs,
       "-jar", this.opts.launcher, "nogui",
     ]
-    log.info(`启动服务端：java -Xmx${this.opts.memoryMB}M -jar ${this.opts.launcher.split("/").pop()} nogui`)
-    const proc = spawn("java", args, { cwd: this.opts.dir })
+    log.info(`启动服务端：java -Xms${xms}M -Xmx${this.opts.memoryMB}M -jar ${this.opts.launcher.split("/").pop()} nogui`)
+    const proc = spawn(java, args, { cwd: this.opts.dir })
     this.proc = proc
     this.exited = false
     const handle = (chunk: Buffer, stream: NodeJS.WriteStream) => {
