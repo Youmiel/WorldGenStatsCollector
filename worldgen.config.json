@@ -1,0 +1,48 @@
+{
+  "minecraft": {
+    "version": "26.3",
+    "loader": null
+  },
+  "server": {
+    "dir": ".server/{version}",
+    "memoryMB": 2048,
+    "levelName": "world",
+    "seed": "",
+    "levelType": "minecraft:normal",
+    "viewDistance": 10,
+    "simulationDistance": 6,
+    "javaArgs": [
+      "-XX:+UseG1GC",
+      "-XX:MaxGCPauseMillis=200",
+      "-Dfile.encoding=UTF-8"
+    ]
+  },
+  "mods": {
+    "chunky": true,
+    "c2me": true,
+    "fabricApi": true,
+    "c2meThreads": 4
+  },
+  "pregen": {
+    "dimension": "overworld",
+    "shape": "circle",
+    "center": [
+      0,
+      0
+    ],
+    "radius": 256,
+    "timeoutMinutes": 60,
+    "settleSeconds": 5
+  },
+  "analyze": {
+    "range": "pregen",
+    "area": null,
+    "outDir": "stats",
+    "dimensions": [
+      "overworld"
+    ],
+    "analyzers": [],
+    "pluginDir": "analyzers",
+    "params": {}
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "worldgen-stats-collector",
+  "version": "0.1.0",
+  "description": "Minecraft 世界生成统计：Fabric 服务端自动装配 + Chunky 预生成 + 存档解析统计",
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "wgs": "node dist/cli.js",
+    "setup": "node dist/cli.js setup",
+    "pregen": "node dist/cli.js pregen",
+    "analyze": "node dist/cli.js analyze",
+    "run": "node dist/cli.js run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "minecraft-block-reader": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "5.9"
+  },
+  "private": true,
+  "bin": {
+    "wgs": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

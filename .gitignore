@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.server/
+stats/
+.cache/
+*.log
+/ref/
