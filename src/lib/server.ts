@@ -164,7 +164,7 @@ export class MinecraftServer {
       ...this.opts.javaArgs,
       "-jar", this.opts.launcher, "nogui",
     ]
-    log.info(`启动服务端：java -Xms${xms}M -Xmx${this.opts.memoryMB}M -jar ${this.opts.launcher.split("/").pop()} nogui`)
+    log.info(`启动服务端：${java} -Xms${xms}M -Xmx${this.opts.memoryMB}M -jar ${this.opts.launcher.split("/").pop()} nogui`)
     const proc = spawn(java, args, { cwd: this.opts.dir })
     this.proc = proc
     this.exited = false
