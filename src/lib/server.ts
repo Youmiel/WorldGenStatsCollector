@@ -34,6 +34,18 @@ export function dimensionDirs(worldDir: string, dimension: string): string[] {
   ]
 }
 
+/**
+ * 实体 region 目录（16+ 实体存在独立文件里）。
+ * 与 dimensionDirs 一一对应，旧版布局下就是 region 的同级 entities 目录。
+ */
+export function dimensionEntityDirs(worldDir: string, dimension: string): string[] {
+  const legacy = dimension === "overworld" ? "" : dimension === "the_nether" ? "DIM-1" : dimension === "the_end" ? "DIM1" : dimension
+  return [
+    join(worldDir, "dimensions", "minecraft", dimension, "entities"),
+    join(worldDir, legacy, "entities"),
+  ]
+}
+
 /** Chunky 在 26.x 里用维度 id 选世界（overworld / the_nether / the_end），不是 level-name */
 export function chunkyWorldName(dimension: string): string {
   return dimension

@@ -1,4 +1,4 @@
-import type { Blocks, BlockState, ChunkGrid, ChunkRef, World } from "minecraft-block-reader"
+import type { Blocks, BlockState, ChunkGrid, ChunkRef, Entity, World } from "minecraft-block-reader"
 
 /** 一个区块的惰性句柄：只有真正调用方法时才解析 NBT */
 export interface ChunkHandle {
@@ -14,6 +14,12 @@ export interface ChunkHandle {
   blocks(opts?: { yMin?: number, yMax?: number, includeAir?: boolean }): Promise<Blocks | null>
   grid(opts?: { yMin?: number, yMax?: number }): Promise<ChunkGrid>
   extent(opts?: { yMin?: number, yMax?: number }): Promise<{ top: number, bottom: number } | null>
+  /**
+   * 区块里的实体（含掉落物、矿车）。
+   * 1.17+ 实体存在独立的 entities/r.x.z.mca 里，不在区块 NBT 里，
+   * 所以这里读的是实体文件，读不到再退回区块 NBT 的 entities 根键；两者都没有就返回空数组。
+   */
+  entities(): Promise<Entity[]>
   /**
    * 原始区块 NBT：绕过 reader 的根键白名单（sections/block_entities/…），
    * 可拿到 structures、Heightmaps 等；only 限定要解析的根键。
@@ -32,6 +38,8 @@ export interface RegionSession {
   palette?: BlockState[]
   /** region 文件原始字节，配合 chunk-nbt 读 world.chunk() 丢掉的字段 */
   bytes: Uint8Array
+  /** 同维度的实体 region 文件路径（entities/r.x.z.mca），没有就 null */
+  entityPath?: string | null
 }
 
 export interface AnalyzerContext {

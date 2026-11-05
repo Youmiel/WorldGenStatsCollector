@@ -106,7 +106,7 @@ export default {
         // await session.world.chunkBlocks(ref, { yMin, yMax })
       },
       async onChunk(chunk, ctx) {
-        // chunk: { ref, x, z, nbt(), blocks(opts), grid(opts), extent(opts) }
+        // chunk: { ref, x, z, nbt(), blocks(opts), grid(opts), extent(opts), entities() }
         // 全部惰性：不调用就不解析 NBT
         n += chunk.blocks ? 1 : 0
       },
@@ -121,7 +121,8 @@ export default {
 }
 ```
 
-- `onChunk` 里可以随意组合 `blocks()`（方块 + 方块实体）、`grid()`（含生物群系）、`extent()`（地表高度），同一个 chunk 内结果有缓存。
+- `onChunk` 里可以随意组合 `blocks()`（方块 + 方块实体）、`grid()`（含生物群系）、`extent()`（地表高度）、`entities()`（实体），同一个 chunk 内结果有缓存。
+- `chunk.entities()` 读的是 `<dim>/entities/r.x.z.mca`（1.17+ 实体不在区块里），读不到再退回区块 NBT 的 `entities` 根键。它不会调用 `blocks()`，所以只统计实体时开销很小（实体文件平均百 KB 级，按 region 懒读一次）。
 - `chunk.rawNbt(["structures"])` 读完整区块 NBT：reader 的 `nbt()` 只保留 sections 等白名单根键，structures、Heightmaps 这类字段要用这条通道（`ctx.runtime.serverJar` 指向原版 jar，可读数据包 JSON）。
 - `ctx.emit(key, value)` 累积字段，`ctx.log(...)` 输出到控制台，`params` 是配置透传。
 - 一个分析器抛错不影响同批其它分析器；错误写进结果文件。
