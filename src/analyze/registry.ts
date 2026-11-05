@@ -27,6 +27,7 @@ registerProduction("biome-histogram", () => import("./production/biome-histogram
 registerProduction("ore-exposure", () => import("./production/ore-exposure.js").then(m => m.default))
 registerProduction("structure-spacing", () => import("./production/structure-spacing.js").then(m => m.default))
 registerProduction("section-block-histogram", () => import("./production/section-block-histogram.js").then(m => m.default))
+registerProduction("lava-lakes", () => import("./production/lava-lakes.js").then(m => m.default))
 
 registerExample("chunk-index", () => import("./examples/chunk-index.js").then(m => m.default))
 registerExample("block-histogram", () => import("./examples/block-histogram.js").then(m => m.default))
