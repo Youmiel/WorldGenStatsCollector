@@ -1,10 +1,6 @@
 # WorldGenStatsCollector
 
-Minecraft 世界生成统计工具：自动装配指定版本的 Fabric 服务端 → Chunky 预生成区块 → 解析存档 → 可插拔统计。
-
-```
-安装/装配  →  预生成（Chunky + c2me）  →  解析存档（minecraft-block-reader）  →  统计插件
-```
+Minecraft 世界生成统计工具：自动装配指定版本的 Fabric 服务端，用 Chunky + c2me 预生成区块，再用 minecraft-block-reader 解析存档并运行统计插件。
 
 ## 快速开始
 
@@ -14,8 +10,8 @@ npm run build
 
 node dist/cli.js setup    # 安装服务端 + 模组 + 配置，并首启验证
 node dist/cli.js pregen   # 预生成
-node dist/cli.js analyze  # 统计生产分析器（默认按预生成记录的范围）
-node dist/cli.js analyze --all       # 全量统计
+node dist/cli.js analyze  # 统计生产分析器（默认用预生成记录的范围）
+node dist/cli.js analyze --all       # 统计全量范围
 node dist/cli.js analyze --area 0,0,512 --area-shape square
 # 或者一步到位
 node dist/cli.js run --radius 512
@@ -25,26 +21,24 @@ node dist/cli.js run --radius 512
 
 | 命令 | 作用 |
 |---|---|
-| `setup` | 检查/下载最新 fabric-installer，安装指定 MC 版本服务端、chunky、c2me、fabric-api，写 `server.properties`/`eula.txt`，首启生成 c2me/chunky 配置并调线程数与优先级 |
+| `setup` | 检查/下载 fabric-installer，安装指定 MC 版本的服务端与 fabric-api / chunky / c2me，写 `server.properties`、`eula.txt`，首启生成并调整 c2me、chunky 配置 |
 | `pregen` | 启动服务端，用 Chunky 按配置的 center/shape/radius 预生成，解析进度，完成后 `stop` |
 | `analyze` | 遍历存档 region 文件，运行启用的统计器，结果写 `stats/<时间戳>/` |
-| `run` | setup → pregen → analyze |
+| `run` | 依次执行 setup、pregen、analyze |
 | `info` | 查看当前配置与安装状态 |
 | `clean` | 删除统计结果；`--all` 连服务端一起删 |
 
 常用参数：`--version`、`--loader`、`--seed`、`--mem`、`--radius`、`--shape`、`--center`、`--dimension`、`--timeout`、`--analyzers`、`--all`、`--area`、`--area-shape`、`--no-boot`、`--update-installer`、`--force`、`--verbose`。
 
-CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长期改配置请直接改文件。
+CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长期改配置请直接改文件。`--all` 指统计全量范围，`--analyzers all` 指运行全部分析器，两者互不相关。
 
-`server.dir` 支持 `{version}` 占位符，默认 `.server/{version}`，即每个 MC 版本一个独立服务端目录（world / mods / config 全隔离）。`--server-dir` 指定的是字面路径，也支持占位符。
+`server.dir` 支持 `{version}` 占位符，默认 `.server/{version}`，即每个 MC 版本一个独立服务端目录（world / mods / config 全隔离）；`--server-dir` 指定字面路径，同样支持占位符。
 
 ## 配置 `worldgen.config.json`
 
-首次运行自动生成，CLI 参数会覆盖并回写。
+首次运行自动生成，之后手动编辑。**这个文件属于本机配置，不进版本库**（`.gitignore` 已包含）：`javaPath` 通常是本机 JDK 的绝对路径，对别人没意义，也不该出现在提交里。仓库里跟踪的是模板 `worldgen.config.example.json`，字段与默认值一致，需要查字段时看它。
 
-**这个文件属于本机配置，不进版本库**（`.gitignore` 已包含）。原因见 `javaPath`：它通常是本机 JDK 的绝对路径，对别人没意义，也不该出现在提交里。仓库里跟踪的是模板 `worldgen.config.example.json`，字段与默认值一致，需要查字段时看它。
-
-`javaPath` 留 `null` 就走 PATH 里的 `java`；只有 PATH 上的 java 版本不对（比如系统装的是 JDK 11，跑不了 26.x）时才需要填绝对路径。这一项填了就别让这个文件回到 git 里。
+`javaPath` 留 `null` 就走 PATH 里的 `java`；只有 PATH 上的 java 版本不对（比如系统装的是 JDK 11，跑不了 26.x）时才需要填绝对路径。
 
 ```jsonc
 {
@@ -73,13 +67,13 @@ CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长�
 
 ## 统计层
 
-统计逻辑与主程序解耦，分三类：
+统计逻辑与主程序解耦。分为三类：
 
-- 生产分析器 `src/analyze/production/` — `analyze` 默认只跑这些
-- 示例分析器 `src/analyze/examples/` — 需要 `--analyzers` 点名，如 `--analyzers chunk-index,block-histogram`
-- 外部分析器 `analyzers/*.js` — 同样需要点名，接口与示例分析器一致
+- 生产分析器 `src/analyze/production/` — 编译后从 `dist/analyze/production/` 自动发现，`analyze` 默认只跑这些
+- 示例分析器 `src/analyze/examples/` — 已载入但不默认跑，要在 `--analyzers` 里写出名字，如 `--analyzers chunk-index,block-histogram`
+- 外部分析器 `analyzers/*.js` — 同样已载入但不默认跑，需点名；不经编译，改完直接生效
 
-`--analyzers all` 跑全部（生产 + 示例 + 插件），`--analyzers examples` 只跑示例。
+三类分析器都按目录发现、共用同一个加载器（模块导出 `{ name, create }`），同名时外部插件覆盖内置，可临时替换某个统计的实现。指定 `--analyzers all` 可一次性运行全部三类，指定 `--analyzers examples` 只跑示例。
 
 示例分析器（`src/analyze/examples/`）：
 
@@ -90,9 +84,9 @@ CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长�
 
 ### 写自己的分析器
 
-`src/analyze/examples/ore-scan.ts` 是最小骨架：接口和插件完全一致，抄成 `.js` 丢进 `analyzers/` 就能用 `--analyzers` 点名运行。
+`src/analyze/examples/ore-scan.ts` 是最小骨架，接口与外部分析器完全一致：放（或新建）到 `src/analyze/production/` 并 `npm run build` 即是生产分析器，无需注册；抄成 `.js` 丢进 `analyzers/` 则作为外部分析器，用 `--analyzers` 点名。
 
-在 `analyzers/` 放一个 `.js`（ESM）文件，默认导出一个对象：
+外部分析器是一个 ESM 模块，默认导出一个对象：
 
 ```js
 export default {
@@ -127,23 +121,21 @@ export default {
 - `ctx.emit(key, value)` 累积字段，`ctx.log(...)` 输出到控制台，`params` 是配置透传。
 - 一个分析器抛错不影响同批其它分析器；错误写进结果文件。
 
-结果目录：
+结果写在 `stats/<时间戳>/`：
 
 ```
-stats/2026-11-04T03-12-45-123Z/
-  <分析器名>.json
-  summary.json
+<分析器名>.json
+summary.json
 ```
 
 ## 多版本并存
 
-- 服务端目录按版本隔离：`.server/26.3/`、`.server/26.2/`，各自带 world、mods、config、日志。
-- 切版本只需 `--version 26.2`（或改配置），不会污染已有版本的世界与模组。
+- 服务端目录按版本隔离：`.server/26.3/`、`.server/26.2/`，各自带 world、mods、config、日志；切版本只需 `--version 26.2`，不会污染已有版本。
 - 删掉整个 `.server/<version>/` 即可回收该版本的全部产物。
 
 ## 旧版本（1.16 / 1.17）：自定义世界生成数据包
 
-1.16 / 1.17 的服务端在首次创建世界时就把世界生成设置固定进 `level.dat`，之后再改数据包不会影响已生成的内容。用世界生成数据包（worldgen datapack）时必须按下面的顺序手工操作：
+1.16 / 1.17 的服务端在首次创建世界时就把世界生成设置固定进 `level.dat`，之后改数据包不会影响已生成的内容。用世界生成数据包时必须按下面的顺序手工操作：
 
 1. 先把数据包放进服务端目录（服务端根目录的 `datapacks/`，或世界目录下的 `datapacks/`）。
 2. 带数据包启动一次服务端，让它完成首次世界创建。`setup` 的首启正好是这一步；如果用了 `--no-boot`，需要自己起一次。

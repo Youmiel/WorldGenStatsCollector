@@ -169,7 +169,8 @@ async function cmdInfo(cfg: Config) {
     console.log(`mods: ${(await mods).join(", ") || "(空)"}`)
   }
   console.log(`预生成: ${cfg.pregen.dimension} ${cfg.pregen.shape} r=${cfg.pregen.radius} center=${cfg.pregen.center.join(",")}`)
-  console.log(`分析器: ${(cfg.analyze.analyzers.length ? cfg.analyze.analyzers : productionNames()).join(", ")}`)
+  const names = cfg.analyze.analyzers.length ? cfg.analyze.analyzers : await productionNames()
+  console.log(`分析器: ${names.join(", ")}`)
   console.log(`统计目录: ${resolve(ROOT, cfg.analyze.outDir)}`)
 }
 

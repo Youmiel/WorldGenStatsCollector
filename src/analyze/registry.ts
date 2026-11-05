@@ -1,99 +1,104 @@
 import { readdir } from "node:fs/promises"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { join, resolve } from "node:path"
 import type { AnalyzerModule } from "./types.js"
 import { log } from "../lib/util.js"
 
 /**
- * 分析器分三类：
- * - production：生产分析器（最终出统计结果用的），analyze 默认只跑这些
- * - examples：示例分析器，需要 --analyzers 点名
- * - plugins：analyzers/ 里的外部分析器，同样需要点名
+ * 分析器全部按目录发现，进程内没有逐项注册表：
+ * - 生产分析器：本文件同级的 ./production（编译产物），analyze 默认只跑这些
+ * - 示例分析器：本文件同级的 ./examples，需要 --analyzers 点名
+ * - 外部分析器：config.analyze.pluginDir（默认 analyzers/），同样需要点名
+ *
+ * 三类共用同一个加载器，判定标准一致：默认导出或具名导出（`mod.default ?? mod`）
+ * 一个 `{ name, create(params) }` 对象。加生产分析器只需往 production/ 丢一个文件。
  */
-const production = new Map<string, () => Promise<AnalyzerModule>>()
-const examples = new Map<string, () => Promise<AnalyzerModule>>()
 
-/** 注册生产分析器（惰性 import，避免没用到也加载） */
-export function registerProduction(name: string, loader: () => Promise<AnalyzerModule>) {
-  production.set(name, loader)
-}
-
-/** 注册示例分析器 */
-export function registerExample(name: string, loader: () => Promise<AnalyzerModule>) {
-  examples.set(name, loader)
-}
-
-registerProduction("biome-histogram", () => import("./production/biome-histogram.js").then(m => m.default))
-registerProduction("ore-exposure", () => import("./production/ore-exposure.js").then(m => m.default))
-registerProduction("structure-spacing", () => import("./production/structure-spacing.js").then(m => m.default))
-registerProduction("section-block-histogram", () => import("./production/section-block-histogram.js").then(m => m.default))
-registerProduction("lava-lakes", () => import("./production/lava-lakes.js").then(m => m.default))
-registerProduction("entity-census", () => import("./production/entity-census.js").then(m => m.default))
-
-registerExample("chunk-index", () => import("./examples/chunk-index.js").then(m => m.default))
-registerExample("block-histogram", () => import("./examples/block-histogram.js").then(m => m.default))
-registerExample("surface-profile", () => import("./examples/surface-profile.js").then(m => m.default))
-registerExample("ore-scan", () => import("./examples/ore-scan.js").then(m => m.default))
-
-export function productionNames(): string[] {
-  return [...production.keys()]
-}
-
-export function exampleNames(): string[] {
-  return [...examples.keys()]
+const BUILTIN_DIRS = {
+  production: fileURLToPath(new URL("./production/", import.meta.url)),
+  examples: fileURLToPath(new URL("./examples/", import.meta.url)),
 }
 
 /**
- * 外部分析器：analyzers/*.js|mjs，模块需导出 { name, create(params) } 或默认导出该对象。
- * 这样加统计只要丢一个文件进 analyzers/，不用改主程序。
+ * 从目录加载分析器。
+ *
+ * reload=true 时给 import URL 加时间戳绕过模块缓存 —— 外部目录的文件用户可能边跑边改；
+ * 内置目录不加，靠模块缓存避免重复解析（两者都在单次进程运行里只加载一次）。
  */
-export async function loadPlugins(dir: string): Promise<AnalyzerModule[]> {
-  const out: AnalyzerModule[] = []
+async function loadAnalyzersFromDir(
+  dir: string,
+  opts: { label: string, reload?: boolean },
+): Promise<AnalyzerModule[]> {
   let files: string[]
   try {
     files = await readdir(dir)
   } catch {
-    return out
+    return []
   }
+  const out: AnalyzerModule[] = []
   for (const f of files.sort()) {
     if (!/\.(m?js|cjs)$/.test(f)) continue
-    const full = resolve(join(dir, f))
+    const url = pathToFileURL(resolve(join(dir, f))).href
     try {
-      const mod = await import(pathToFileURL(full).href + `?t=${Date.now()}`)
+      const mod = await import(opts.reload ? `${url}?t=${Date.now()}` : url)
       const m = (mod.default ?? mod) as Partial<AnalyzerModule>
       if (typeof m?.create !== "function" || typeof m?.name !== "string") {
-        log.warn(`插件 ${f} 不是有效的分析器（需要 name + create()）`)
+        log.warn(`${opts.label} ${f} 不是有效的分析器（需要 name + create()）`)
         continue
       }
       out.push(m as AnalyzerModule)
-      log.info(`载入插件分析器 ${m.name} (${f})`)
     } catch (e) {
-      log.warn(`插件 ${f} 载入失败：${(e as Error).message}`)
+      log.warn(`${opts.label} ${f} 载入失败：${(e as Error).message}`)
     }
   }
   return out
 }
 
-/** 预留的选择器：all = 生产 + 示例 + 插件，examples = 只看示例 */
+export function productionAnalyzers(): Promise<AnalyzerModule[]> {
+  return loadAnalyzersFromDir(BUILTIN_DIRS.production, { label: "生产分析器" })
+}
+
+export function exampleAnalyzers(): Promise<AnalyzerModule[]> {
+  return loadAnalyzersFromDir(BUILTIN_DIRS.examples, { label: "示例分析器" })
+}
+
+/** 外部分析器：analyzers/*.js|mjs，模块需导出 { name, create(params) } */
+export function loadPlugins(dir: string): Promise<AnalyzerModule[]> {
+  return loadAnalyzersFromDir(dir, { label: "插件", reload: true })
+}
+
+export async function productionNames(): Promise<string[]> {
+  return (await productionAnalyzers()).map(m => m.name)
+}
+
+export async function exampleNames(): Promise<string[]> {
+  return (await exampleAnalyzers()).map(m => m.name)
+}
+
+/** 选择器：all = 生产 + 示例 + 插件，examples = 只看示例 */
 const SELECTORS = new Set(["all", "examples"])
 
 /**
  * 解析要跑的分析器。
  * names 为空 = 只跑生产分析器；否则按名字选取，可用 all / examples 选择器。
+ * 同名时外部插件覆盖内置（方便临时替换某个统计的实现）。
  */
 export async function resolveAnalyzers(names: string[], pluginDir: string): Promise<AnalyzerModule[]> {
-  const plugins = await loadPlugins(pluginDir)
-  const pool = new Map<string, AnalyzerModule | (() => Promise<AnalyzerModule>)>()
-  for (const [k, v] of production) pool.set(k, v)
-  for (const [k, v] of examples) pool.set(k, v)
-  for (const p of plugins) pool.set(p.name, p)
+  const [production, examples, plugins] = await Promise.all([
+    productionAnalyzers(),
+    exampleAnalyzers(),
+    loadPlugins(pluginDir),
+  ])
+
+  const pool = new Map<string, AnalyzerModule>()
+  for (const m of [...production, ...examples, ...plugins]) pool.set(m.name, m)
 
   const wanted = names.filter(n => !SELECTORS.has(n))
   const picked: string[] = []
-  if (!names.length) picked.push(...productionNames())
+  if (!names.length) picked.push(...production.map(m => m.name))
   else {
-    if (names.includes("all")) picked.push(...productionNames(), ...exampleNames(), ...plugins.map(p => p.name))
-    if (names.includes("examples")) picked.push(...exampleNames())
+    if (names.includes("all")) picked.push(...pool.keys())
+    if (names.includes("examples")) picked.push(...examples.map(m => m.name))
     picked.push(...wanted)
   }
 
@@ -102,12 +107,12 @@ export async function resolveAnalyzers(names: string[], pluginDir: string): Prom
   for (const n of picked) {
     if (seen.has(n)) continue
     seen.add(n)
-    const entry = pool.get(n)
-    if (!entry) {
+    const m = pool.get(n)
+    if (!m) {
       log.warn(`未知分析器 ${n}，可选：${[...pool.keys()].join(", ")}（另有 all / examples）`)
       continue
     }
-    out.push(typeof entry === "function" ? await entry() : entry)
+    out.push(m)
   }
   if (!out.length) throw new Error("没有可用的分析器")
   return out
