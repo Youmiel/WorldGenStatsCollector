@@ -56,7 +56,7 @@ async function applyOverrides(cfg: Config, args: Args): Promise<Config> {
   if (args.area) {
     const [x, z, r] = String(args.area).split(",").map(Number)
     if (![x, z, r].every(Number.isFinite)) throw new Error(`--area 需要 x,z,radius（收到 ${args.area}）`)
-    c.analyze.area = { shape: (args["area-shape"] ? String(args["area-shape"]) : "circle") as "circle" | "square", center: [x, z], radius: r }
+    c.analyze.area = { shape: (args["area-shape"] ? String(args["area-shape"]) : "square") as "circle" | "square", center: [x, z], radius: r }
   }
   if (args.timeout) c.pregen.timeoutMinutes = Number(args.timeout)
   if (args.analyzers) c.analyze.analyzers = String(args.analyzers).split(",").map(s => s.trim()).filter(Boolean)
@@ -234,7 +234,7 @@ async function main() {
   --center <x,z>         预生成中心
   --dimension <dim>      overworld / the_nether / the_end
   --all                  统计全量（忽略预生成范围）
-  --area <x,z,r>         手动指定统计范围
+  --area <x,z,r>         手动指定统计范围（默认方形，与 Chunky 的区块铺开一致）
   --area-shape <circle|square>
   --timeout <min>        预生成超时
   --analyzers <a,b>      指定分析器（默认只跑生产分析器；all = 全部，examples = 示例）

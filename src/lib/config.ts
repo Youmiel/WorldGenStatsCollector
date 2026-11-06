@@ -78,7 +78,7 @@ export const DEFAULT_CONFIG: Config = {
     javaArgs: ["-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200", "-Dfile.encoding=UTF-8"],
   },
   mods: { chunky: true, c2me: true, fabricApi: true, c2meThreads: 4, c2mePriority: null },
-  pregen: { dimension: "overworld", shape: "circle", center: [0, 0], radius: 256, timeoutMinutes: 60, settleSeconds: 5 },
+  pregen: { dimension: "overworld", shape: "square", center: [0, 0], radius: 256, timeoutMinutes: 60, settleSeconds: 5 },
   analyze: {
     range: "pregen",
     area: null,

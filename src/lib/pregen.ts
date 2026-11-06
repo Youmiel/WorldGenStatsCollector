@@ -30,7 +30,15 @@ const RUNNING = /Task running for .*?Processed:\s*([\d,]+) chunks \((\d+(?:\.\d+
 const FINISHED = /Task finished for .*?Processed:\s*([\d,]+) chunks/
 const STOPPED = /Task stopped for/
 
-/** Chunky 的选区在区块空间是切比雪夫方形（实测 r=128 → 289 = 17x17） */
+/**
+ * 选区的外接方形区块包围盒（不区分形状）。
+ *
+ * - square：就是选区本身（切比雪夫方形）
+ * - circle：外接正方形，只是「上限盒」，真正的圆要由 chunkInArea 再按欧氏距离裁一次
+ *
+ * 实测（r=1100 方块）：circle 落盘的是真欧氏圆 —— 每层区块数 ≈ 2πd，d=72 区块处归零；
+ * square 则是切比雪夫方形（r=128 → 289 = 17x17）。所以这个盒不能单独当成统计范围。
+ */
 export function chunkBounds(center: [number, number], radius: number) {
   const r = Math.ceil(radius / 16)
   const cx = Math.floor(center[0] / 16)
@@ -38,7 +46,7 @@ export function chunkBounds(center: [number, number], radius: number) {
   return { minX: cx - r, maxX: cx + r, minZ: cz - r, maxZ: cz + r }
 }
 
-/** 估算圆形/方形范围内需要的区块数（仅用于展示，实际以 chunky 为准） */
+/** 估算选区内的区块数（仅用于展示，实际以 chunky 的 processed 为准） */
 export function estimateChunks(shape: string, radius: number): number {
   const area = shape === "circle" ? Math.PI * radius * radius : (radius * 2) ** 2
   return Math.ceil(area / 256)

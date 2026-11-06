@@ -2,14 +2,19 @@ import type { Area } from "../lib/config.js"
 
 /**
  * 判断区块是否落在选区内。
- * - square：切比雪夫距离（Chunky 的 square 就是方形，不是欧氏圆形）
- * - circle：欧氏距离
- * 判定用「区块矩形与选区相交」，比只看区块中心更接近 Chunky 实际处理的数量。
+ *
+ * 两层判定：
+ * 1. chunkBounds（预生成记录的区块包围盒）先做快速外围排除 —— 它只是「框住」范围的上限盒，
+ *    方形盒会把圆周外的角点也框进来，不能单独用来定形状。
+ * 2. 再按 area.shape 判定：square = 切比雪夫距离，circle = 欧氏距离。
+ *
+ * 实测：Chunky `circle` 落盘的是**真正的欧氏圆**（r=1100 → 每层区块数 ≈ 2πd，d=72 区块处归零）；
+ * `square` 才是切比雪夫方形。所以形状必须按 shape 走，不能由包围盒短路。
  */
 export function chunkInArea(cx: number, cz: number, area: Area): boolean {
   if (area.chunkBounds) {
     const b = area.chunkBounds
-    return cx >= b.minX && cx <= b.maxX && cz >= b.minZ && cz <= b.maxZ
+    if (cx < b.minX || cx > b.maxX || cz < b.minZ || cz > b.maxZ) return false
   }
   const x0 = cx * 16, z0 = cz * 16
   const x1 = x0 + 15, z1 = z0 + 15
@@ -29,7 +34,7 @@ export function chunkInArea(cx: number, cz: number, area: Area): boolean {
 export function describeArea(area: Area): string {
   const [x, z] = area.center
   const box = area.chunkBounds
-  const suffix = box ? ` chunks=[${box.minX}..${box.maxX}]x[${box.minZ}..${box.maxZ}]` : ""
+  const suffix = box ? ` boundChunks=[${box.minX}..${box.maxX}]x[${box.minZ}..${box.maxZ}]` : ""
   return `${area.shape} center=${x},${z} r=${area.radius}${suffix}`
 }
 

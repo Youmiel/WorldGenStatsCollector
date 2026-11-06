@@ -9,3 +9,4 @@ stats/
 # 本机配置
 worldgen.config.json
 fabric-installer*.jar
+.viz/

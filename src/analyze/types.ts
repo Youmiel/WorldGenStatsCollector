@@ -50,8 +50,8 @@ export interface AnalyzerContext {
   emit: (key: string, value: unknown) => void
   /** 自上次调用以来的耗时 */
   elapsedMs: () => number
-  /** 运行环境：存档目录与原版服务端 jar（数据包数据来源） */
-  runtime: { worldDir: string, serverJar: string | null }
+  /** 运行环境：存档目录、原版服务端 jar（数据包数据来源）、本次结果输出目录 */
+  runtime: { worldDir: string, serverJar: string | null, outDir: string }
 }
 
 export interface Analyzer {

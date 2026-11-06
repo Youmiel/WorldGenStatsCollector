@@ -16,10 +16,12 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "minecraft-block-reader": "^2.1.0"
+    "minecraft-block-reader": "^2.1.0",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@types/pngjs": "^6.0.5",
     "typescript": "5.9"
   },
   "private": true,

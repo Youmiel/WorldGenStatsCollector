@@ -75,7 +75,7 @@ function makeHandle(
 function contextFor(
   analyzer: Analyzer,
   params: Record<string, unknown>,
-  runtime: { worldDir: string, serverJar: string | null },
+  runtime: { worldDir: string, serverJar: string | null, outDir: string },
 ): { ctx: AnalyzerContext, store: Record<string, unknown> } {
   const store: Record<string, unknown> = {}
   let last = Date.now()
@@ -129,11 +129,11 @@ async function listRegions(
 export async function runAnalysis(opts: AnalyzeOptions, modules: AnalyzerModule[]): Promise<AnalysisRunResult[]> {
   const { cfg } = opts
   const params = cfg.analyze.params as Record<string, unknown>
-  const runtime = { worldDir: opts.worldDir, serverJar: opts.serverJar ?? null }
   const results: AnalysisRunResult[] = []
   const runId = new Date().toISOString().replace(/[:.]/g, "-")
   const outDir = join(opts.outDir, runId)
   await mkdir(outDir, { recursive: true })
+  const runtime = { worldDir: opts.worldDir, serverJar: opts.serverJar ?? null, outDir }
 
   for (const mod of modules) {
     const analyzer = mod.create(params)

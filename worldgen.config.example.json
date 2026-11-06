@@ -27,7 +27,7 @@
   },
   "pregen": {
     "dimension": "overworld",
-    "shape": "circle",
+    "shape": "square",
     "center": [
       0,
       0
