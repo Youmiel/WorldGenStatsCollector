@@ -77,11 +77,11 @@ const isLiving = (id: string) => !NON_LIVING.has(shortId(id))
 interface TypeStat { count: number, sumY: number, points: Point3[] }
 interface Point3 { x: number, y: number, z: number }
 
-const round = (v: number, digits: number) => Number(v.toFixed(digits))
-const avg = (n: number, d: number) => (d > 0 ? Number((n / d).toFixed(4)) : 0)
+/** 显示层取整：产物一律保留原始浮点，按契约不在采集侧四舍五入 */
+const avg = (n: number, d: number) => (d > 0 ? n / d : 0)
 
 /** 每区块平均的倒数：平均多少区块出现一个。期望值为 0 时无法取倒数，返回 null */
-const inverse = (n: number, denom: number) => (n > 0 ? Number((denom / n).toFixed(2)) : null)
+const inverse = (n: number, denom: number) => (n > 0 ? denom / n : null)
 
 /**
  * 同种实体的群聚类：水平距离 <= radius 且垂直距离 <= height 的实体连成一群，
@@ -147,6 +147,7 @@ function clusterSizes(points: Point3[], radius: number, height: number): number[
 const analyzer: AnalyzerModule = {
   name: KEY,
   description: "实体/动物数量与每区块平均密度（分陆生、水生、敌对、NPC）",
+  units: { density: "per_chunk", count: "entity" },
   create(params): Analyzer {
     const p = (params[KEY] ?? {}) as Record<string, unknown>
     const onlyLiving = p.onlyLiving !== false
@@ -205,7 +206,7 @@ const analyzer: AnalyzerModule = {
             groups,
             perChunk: avg(groups, chunks),
             chunksPer: inverse(groups, chunks),
-            avgSize: groups ? round(count / groups, 2) : 0,
+            avgSize: groups ? count / groups : 0,
             singletons: sizes.filter(s => s === 1).length,
             maxSize: sizes.length ? Math.max(...sizes) : 0,
           }
@@ -220,7 +221,7 @@ const analyzer: AnalyzerModule = {
           perChunk: avg(t.count, chunks),
           /** 平均每多少个区块出现一只 */
           chunksPer: inverse(t.count, chunks),
-          avgY: round(t.sumY / t.count, 1),
+          avgY: t.sumY / t.count,
           group: groupStat(id, t.count),
         }))
         for (const r of typeRows) cats[r.category] += r.count
@@ -234,7 +235,7 @@ const analyzer: AnalyzerModule = {
             groups,
             perChunk: avg(groups, chunks),
             chunksPer: inverse(groups, chunks),
-            avgSize: groups ? round(count / groups, 2) : 0,
+            avgSize: groups ? count / groups : 0,
           }
         }
 
@@ -284,7 +285,7 @@ const analyzer: AnalyzerModule = {
             groupsPerChunk: wantGroups ? avg(animalGroups, chunks) : null,
             /** 平均多少区块出现一群动物 */
             chunksPerGroup: wantGroups ? inverse(animalGroups, chunks) : null,
-            avgGroupSize: wantGroups && animalGroups ? round(animalCount / animalGroups, 2) : null,
+            avgGroupSize: wantGroups && animalGroups ? animalCount / animalGroups : null,
             byType: Object.fromEntries(animalTypes.map(r => [r.id, {
               count: r.count, perChunk: r.perChunk, chunksPer: r.chunksPer, avgY: r.avgY, group: r.group,
             }])),
@@ -300,6 +301,8 @@ const analyzer: AnalyzerModule = {
     }
   },
   format(result) {
+    /** 显示用：两位小数，去掉无意义的尾随零 */
+    const dsp = (v: number) => Number(v.toFixed(2))
     type GroupStat = { groups: number, perChunk: number, chunksPer: number | null, avgSize: number, singletons: number, maxSize: number }
     type TypeRow = { count: number, perChunk: number, chunksPer: number | null, avgY: number, group: GroupStat | null }
     const r = result as {
@@ -327,28 +330,28 @@ const analyzer: AnalyzerModule = {
       byCategory: Record<string, { count: number, perChunk: number, chunksPer: number | null, types: number, group: GroupStat | null }>
       byType: Record<string, TypeRow & { category: string }>
     }
-    const num = (v: number | null | undefined) => (v === null || v === undefined ? "-" : String(v))
+    const num = (v: number | null | undefined) => (v === null || v === undefined ? "-" : String(dsp(v)))
     const lines = [
-      `区块 ${r.chunks}，实体 ${r.entities}（每区块 ${r.perChunk}，即每 ${num(r.chunksPer)} 区块 1 个；${r.chunksWithEntities} 个区块有实体）`,
+      `区块 ${r.chunks}，实体 ${r.entities}（每区块 ${dsp(r.perChunk)}，即每 ${num(r.chunksPer)} 区块 1 个；${r.chunksWithEntities} 个区块有实体）`,
     ]
     if (r.skippedNonLiving) lines.push(`  已剔除非生物实体 ${r.skippedNonLiving}（掉落物/经验球/载具/方块实体等）`)
     const a = r.animals
     lines.push(
-      `动物 ${a.count}（每区块 ${a.perChunk}，即每 ${num(a.chunksPer)} 区块 1 只）：陆生 ${a.land.count}（每区块 ${a.land.perChunk}，每 ${num(a.land.chunksPer)} 区块 1 只）  水生 ${a.water.count}（每区块 ${a.water.perChunk}，每 ${num(a.water.chunksPer)} 区块 1 只）  种类 ${a.uniqueTypes}`,
+      `动物 ${a.count}（每区块 ${dsp(a.perChunk)}，即每 ${num(a.chunksPer)} 区块 1 只）：陆生 ${a.land.count}（每区块 ${dsp(a.land.perChunk)}，每 ${num(a.land.chunksPer)} 区块 1 只）  水生 ${a.water.count}（每区块 ${dsp(a.water.perChunk)}，每 ${num(a.water.chunksPer)} 区块 1 只）  种类 ${a.uniqueTypes}`,
     )
     if (a.groups !== null) {
       const cl = r.clustering
       const scope = cl ? `同种 ${cl.radius} 方块内、垂直 ${cl.height} 内` : ""
       lines.push(
-        `动物群 ${a.groups}（每区块 ${a.groupsPerChunk}，即每 ${num(a.chunksPerGroup)} 区块 1 群，平均 ${num(a.avgGroupSize)} 只/群；${scope}）`,
+        `动物群 ${a.groups}（每区块 ${num(a.groupsPerChunk)}，即每 ${num(a.chunksPerGroup)} 区块 1 群，平均 ${num(a.avgGroupSize)} 只/群；${scope}）`,
       )
     }
     const animals = Object.entries(a.byType).sort((x, y) => y[1].count - x[1].count)
     for (const [id, v] of animals.slice(0, r.top)) {
       const g = v.group
-      const gtext = g ? `${String(g.groups).padStart(4)} 群（${g.avgSize}/群）` : "-"
+      const gtext = g ? `${String(g.groups).padStart(4)} 群（${dsp(g.avgSize)}/群）` : "-"
       lines.push(
-        `  ${id.replace("minecraft:", "").padEnd(18)} ${String(v.count).padStart(5)}  每区块 ${String(v.perChunk).padStart(8)}  每 ${num(v.chunksPer).padStart(7)} 区块 1 只  ${gtext}  y=${v.avgY}`,
+        `  ${id.replace("minecraft:", "").padEnd(18)} ${String(v.count).padStart(5)}  每区块 ${String(dsp(v.perChunk)).padStart(8)}  每 ${num(v.chunksPer).padStart(7)} 区块 1 只  ${gtext}  y=${dsp(v.avgY)}`,
       )
     }
     const others = Object.entries(r.byCategory)
@@ -356,8 +359,8 @@ const analyzer: AnalyzerModule = {
       .filter(([, v]) => v.count > 0)
     if (others.length) {
       lines.push(`其他：${others.map(([k, v]) => {
-        const g = v.group ? `${v.group.groups} 群/${v.group.avgSize}只` : "-"
-        return `${k} ${v.count}（每区块 ${v.perChunk}，每 ${num(v.chunksPer)} 区块 1 个；${g}）`
+        const g = v.group ? `${v.group.groups} 群/${dsp(v.group.avgSize)}只` : "-"
+        return `${k} ${v.count}（每区块 ${dsp(v.perChunk)}，每 ${num(v.chunksPer)} 区块 1 个；${g}）`
       }).join("  ")}`)
     }
     return lines

@@ -10,6 +10,14 @@ export interface Area {
   chunkBounds?: { minX: number, maxX: number, minZ: number, maxZ: number }
 }
 
+/** 一个维度的预生成目标 */
+export interface PregenTarget {
+  dimension: string
+  shape: "circle" | "square"
+  center: [number, number]
+  radius: number
+}
+
 export interface Config {
   minecraft: {
     /** Minecraft 版本，例如 "26.3"；null 表示用 installer 的 latest */
@@ -23,7 +31,10 @@ export interface Config {
     /** java 可执行文件绝对路径；null 表示用 PATH 里的 java */
     javaPath: string | null
     levelName: string
+    /** 世界种子；空字符串 = 未指定，setup 时生成一个并写回 */
     seed: string
+    /** seed 的来源：random = 本工具生成，explicit/null = 用户指定 */
+    seedSource: "explicit" | "random" | null
     levelType: string
     viewDistance: number
     simulationDistance: number
@@ -39,10 +50,8 @@ export interface Config {
     c2mePriority: string | null
   }
   pregen: {
-    dimension: string
-    shape: "circle" | "square"
-    center: [number, number]
-    radius: number
+    /** 每个维度一个目标；空维度列表会报错 */
+    dimensions: PregenTarget[]
     timeoutMinutes: number
     /** 任务完成后等几秒再 stop，让 c2me 把在途区块刷盘 */
     settleSeconds: number
@@ -72,13 +81,18 @@ export const DEFAULT_CONFIG: Config = {
     javaPath: null,
     levelName: "world",
     seed: "",
+    seedSource: null,
     levelType: "minecraft:normal",
     viewDistance: 10,
     simulationDistance: 6,
     javaArgs: ["-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200", "-Dfile.encoding=UTF-8"],
   },
   mods: { chunky: true, c2me: true, fabricApi: true, c2meThreads: 4, c2mePriority: null },
-  pregen: { dimension: "overworld", shape: "square", center: [0, 0], radius: 256, timeoutMinutes: 60, settleSeconds: 5 },
+  pregen: {
+    dimensions: [{ dimension: "overworld", shape: "square", center: [0, 0], radius: 256 }],
+    timeoutMinutes: 60,
+    settleSeconds: 5,
+  },
   analyze: {
     range: "pregen",
     area: null,
@@ -110,6 +124,26 @@ export function deepMerge<T>(base: T, patch: unknown): T {
   return out as T
 }
 
+/**
+ * 旧配置迁移：`pregen` 早期是单维度对象（dimension/shape/center/radius）。
+ * deepMerge 会把旧字段原样并进来、dimensions 仍取默认值，用户实际的半径会静默丢失，
+ * 所以在合并前先把旧形态转成 `dimensions: [ ... ]`。
+ */
+function migratePregen(raw: unknown): unknown {
+  if (!isObj(raw)) return raw
+  const pregen = raw.pregen
+  if (!isObj(pregen) || Array.isArray(pregen.dimensions)) return raw
+  const { dimension, shape, center, radius, ...rest } = pregen
+  if (dimension === undefined) return raw
+  const target = {
+    dimension: String(dimension),
+    shape: (shape as PregenTarget["shape"]) ?? "square",
+    center: (center as [number, number]) ?? [0, 0],
+    radius: Number(radius) || 256,
+  }
+  return { ...raw, pregen: { ...rest, dimensions: [target] } }
+}
+
 export async function loadConfig(root: string): Promise<Config> {
   const p = configPath(root)
   if (!(await exists(p))) {
@@ -117,7 +151,7 @@ export async function loadConfig(root: string): Promise<Config> {
     log.info(`已生成默认配置 ${p}`)
     return structuredClone(DEFAULT_CONFIG)
   }
-  const raw = JSON.parse(await readFile(p, "utf8"))
+  const raw = migratePregen(JSON.parse(await readFile(p, "utf8")))
   return deepMerge(structuredClone(DEFAULT_CONFIG), raw)
 }
 

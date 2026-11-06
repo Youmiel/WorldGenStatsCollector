@@ -1,4 +1,4 @@
-import type { Config } from "./config.js"
+import type { Config, PregenTarget } from "./config.js"
 import { chunkyWorldName, MinecraftServer } from "./server.js"
 import { log, pct, sleep } from "./util.js"
 
@@ -12,9 +12,11 @@ export interface PregenRange {
 }
 
 export interface PregenResult {
-  range: PregenRange
+  /** 每个维度一份；顺序与 cfg.pregen.dimensions 一致 */
+  ranges: PregenRange[]
   started: string
   finished: string
+  /** 各维度 processed 区块数之和 */
   chunks: number
   percent: number
   elapsedMs: number
@@ -59,8 +61,9 @@ export interface PregenOptions {
 }
 
 export async function runPregen({ server, cfg, logPath }: PregenOptions): Promise<PregenResult> {
-  const world = chunkyWorldName(cfg.pregen.dimension)
-  const { shape, center, radius, timeoutMinutes } = cfg.pregen
+  const targets = cfg.pregen.dimensions
+  if (!targets.length) throw new Error("pregen.dimensions 为空，没有要预生成的维度")
+  const { timeoutMinutes } = cfg.pregen
 
   await server.start()
   await server.waitReady()
@@ -68,45 +71,25 @@ export async function runPregen({ server, cfg, logPath }: PregenOptions): Promis
   // chunky 的进度输出默认 1s 一条，拉长到 3s 减少刷屏
   server.send("chunky quiet 3")
 
-  let lastLogged = 0
-  let lastPercent = 0
-  let lastChunks = 0
-  const unbind = server.onLine(line => {
-    const m = line.match(RUNNING)
-    if (m) {
-      lastChunks = Number(m[1].replace(/,/g, ""))
-      lastPercent = Number(m[2])
-      const now = Date.now()
-      if (now - lastLogged > 5000) {
-        lastLogged = now
-        log.info(`预生成 ${pct(lastPercent, 100, 1)} (${lastChunks} chunks)`)
-      }
-    }
-  })
-
   const startedAt = new Date()
-  log.info(`预生成 ${world} ${shape} center=${center.join(",")} radius=${radius}（约 ${estimateChunks(shape, radius)} 区块）`)
-
-  server.send(`chunky world ${world}`)
-  server.send(`chunky shape ${shape}`)
-  server.send(`chunky center ${center[0]} ${center[1]}`)
-  server.send(`chunky radius ${radius}`)
-  server.send("chunky start")
+  const ranges: PregenRange[] = []
+  let totalChunks = 0
+  let allFinished = true
 
   const timeoutMs = timeoutMinutes * 60_000
-  let finishedLine: string
   try {
-    finishedLine = await server.waitFor(l => FINISHED.test(l) || STOPPED.test(l), { timeoutMs })
+    for (const t of targets) {
+      const r = await pregenOne(server, t, timeoutMs)
+      ranges.push(r.range)
+      totalChunks += r.chunks
+      allFinished &&= r.finished
+    }
   } catch (e) {
     await server.stop(60_000)
     throw new Error(`预生成未完成：${(e as Error).message}`)
-  } finally {
-    unbind()
   }
 
-  const fm = finishedLine.match(FINISHED)
-  const chunks = fm ? Number(fm[1].replace(/,/g, "")) : lastChunks
-  log.info(`预生成完成：${fm ? `${chunks} chunks` : "任务被停止"}，用时 ${((Date.now() - startedAt.getTime()) / 1000).toFixed(1)}s`)
+  log.info(`预生成全部完成：${ranges.length} 个维度，共 ${totalChunks} chunks，用时 ${((Date.now() - startedAt.getTime()) / 1000).toFixed(1)}s`)
 
   if (cfg.pregen.settleSeconds > 0) {
     log.info(`等待 ${cfg.pregen.settleSeconds}s 让在途区块落盘…`)
@@ -114,18 +97,59 @@ export async function runPregen({ server, cfg, logPath }: PregenOptions): Promis
   }
   await server.stop()
   return {
-    range: {
-      dimension: cfg.pregen.dimension,
-      shape,
-      center,
-      radius,
-      chunkBounds: chunkBounds(center, radius),
-    },
+    ranges,
     started: startedAt.toISOString(),
     finished: new Date().toISOString(),
-    chunks,
-    percent: fm ? 100 : lastPercent,
+    chunks: totalChunks,
+    percent: allFinished ? 100 : 0,
     elapsedMs: Date.now() - startedAt.getTime(),
     logPath,
+  }
+}
+
+/** 跑单个维度：切 world/shape/center/radius，等 Task finished */
+async function pregenOne(
+  server: MinecraftServer,
+  t: PregenTarget,
+  timeoutMs: number,
+): Promise<{ range: PregenRange, chunks: number, finished: boolean }> {
+  const world = chunkyWorldName(t.dimension)
+  const { shape, center, radius } = t
+
+  let lastLogged = 0
+  let lastPercent = 0
+  let lastChunks = 0
+  const unbind = server.onLine(line => {
+    const m = line.match(RUNNING)
+    if (!m) return
+    lastChunks = Number(m[1].replace(/,/g, ""))
+    lastPercent = Number(m[2])
+    const now = Date.now()
+    if (now - lastLogged > 5000) {
+      lastLogged = now
+      log.info(`预生成 ${world} ${pct(lastPercent, 100, 1)} (${lastChunks} chunks)`)
+    }
+  })
+
+  log.info(`预生成 ${world} ${shape} center=${center.join(",")} radius=${radius}（约 ${estimateChunks(shape, radius)} 区块）`)
+
+  try {
+    server.send(`chunky world ${world}`)
+    server.send(`chunky shape ${shape}`)
+    server.send(`chunky center ${center[0]} ${center[1]}`)
+    server.send(`chunky radius ${radius}`)
+    server.send("chunky start")
+
+    const finishedLine = await server.waitFor(l => FINISHED.test(l) || STOPPED.test(l), { timeoutMs })
+    const fm = finishedLine.match(FINISHED)
+    const chunks = fm ? Number(fm[1].replace(/,/g, "")) : lastChunks
+    log.info(`预生成 ${world} 完成：${fm ? `${chunks} chunks` : "任务被停止"}`)
+    return {
+      range: { dimension: t.dimension, shape, center, radius, chunkBounds: chunkBounds(center, radius) },
+      chunks,
+      finished: Boolean(fm),
+    }
+  } finally {
+    unbind()
   }
 }

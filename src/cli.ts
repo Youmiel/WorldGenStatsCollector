@@ -2,15 +2,17 @@
 import { readFile, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { loadConfig, serverDir, type Config } from "./lib/config.js"
+import { loadConfig, serverDir, type Config, type PregenTarget } from "./lib/config.js"
 import { ensureInstaller, installServer, type InstalledServer } from "./lib/fabric.js"
 import { installMods } from "./lib/mods.js"
 import { ensureDir, exists, log, setLogLevel } from "./lib/util.js"
 import { MinecraftServer, dimensionDirs, tuneC2me, tuneChunky, vanillaServerJar, writeServerConfigs } from "./lib/server.js"
 import { runPregen } from "./lib/pregen.js"
+import { ensureSeed } from "./lib/seed.js"
 import { productionNames, resolveAnalyzers } from "./analyze/registry.js"
 import { describeArea } from "./analyze/range.js"
 import { runAnalysis } from "./analyze/runner.js"
+import { buildTarget, readLevelSeed } from "./analyze/target.js"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = process.env.WGS_ROOT ? resolve(process.env.WGS_ROOT) : resolve(HERE, "..")
@@ -42,16 +44,38 @@ async function applyOverrides(cfg: Config, args: Args): Promise<Config> {
   if (args.version) c.minecraft.version = String(args.version)
   if (args["server-dir"]) c.server.dir = String(args["server-dir"])
   if (args.loader) c.minecraft.loader = String(args.loader)
-  if (args.seed !== undefined) c.server.seed = String(args.seed)
+  if (args.seed !== undefined) {
+    c.server.seed = String(args.seed)
+    c.server.seedSource = "explicit"
+  }
   if (args.mem) c.server.memoryMB = Number(args.mem)
-  if (args.radius) c.pregen.radius = Number(args.radius)
-  if (args.shape) c.pregen.shape = String(args.shape) as Config["pregen"]["shape"]
+  // 预生成范围参数作用于 `--dimension` 指定的维度；不指定维度时作用于全部维度，
+  // 这样 `--radius 1100` 可以一次性改掉多维度配置里的所有半径
+  const touched = (): PregenTarget[] => {
+    if (args.dimension) {
+      const dim = String(args.dimension)
+      const found = c.pregen.dimensions.filter(t => t.dimension === dim)
+      if (found.length) return found
+      // 配置里没有这个维度 → 追加一个默认目标
+      const created: PregenTarget = { dimension: dim, shape: "square", center: [0, 0], radius: 256 }
+      c.pregen.dimensions.push(created)
+      return [created]
+    }
+    return c.pregen.dimensions
+  }
+  if (args.radius) for (const t of touched()) t.radius = Number(args.radius)
+  if (args.shape) for (const t of touched()) t.shape = String(args.shape) as PregenTarget["shape"]
   if (args.center) {
     const [x, z] = String(args.center).split(",").map(Number)
     if (!Number.isFinite(x) || !Number.isFinite(z)) throw new Error(`--center 需要 x,z（收到 ${args.center}）`)
-    c.pregen.center = [x, z]
+    for (const t of touched()) t.center = [x, z]
   }
-  if (args.dimension) c.pregen.dimension = String(args.dimension)
+  // `--dimension` 单独给（无范围参数）表示「只预生成这个维度」
+  if (args.dimension && !args.radius && !args.shape && !args.center) {
+    const dim = String(args.dimension)
+    const found = c.pregen.dimensions.find(t => t.dimension === dim)
+    c.pregen.dimensions = [found ?? { dimension: dim, shape: "square", center: [0, 0], radius: 256 }]
+  }
   if (args.all) c.analyze.range = "all"
   if (args.area) {
     const [x, z, r] = String(args.area).split(",").map(Number)
@@ -67,7 +91,16 @@ function serverLogPath(serverDir: string) {
   return join(serverDir, "wgs-server.log")
 }
 
-async function cmdSetup(cfg: Config, args: Args): Promise<InstalledServer> {
+async function cmdSetup(cfg: Config, args: Args, disk: Config): Promise<InstalledServer> {
+  cfg = await ensureSeed(cfg, disk, ROOT)
+  // 世界已经生成过时，改配置不会重建已有区块；不提醒的话，下一次统计的 target.seed 会和预想不符
+  const worldDir = join(serverDir(ROOT, cfg), cfg.server.levelName)
+  if (await exists(join(worldDir, "level.dat"))) {
+    const existing = await readLevelSeed(worldDir)
+    if (existing && existing !== cfg.server.seed) {
+      log.warn(`世界已存在且种子不同（存档 ${existing} / 配置 ${cfg.server.seed}）；已有区块不会重建，要复现请先删除 ${worldDir}`)
+    }
+  }
   const installer = await ensureInstaller(ROOT, Boolean(args["update-installer"]))
   const srv = await installServer(ROOT, cfg, { installer, force: Boolean(args.force) })
   const mods = await installMods(cfg, srv.dir)
@@ -118,21 +151,51 @@ async function cmdPregen(cfg: Config): Promise<void> {
   log.info(`预生成记录 ${out}`)
 }
 
-/** 统计范围：显式 area > pregen 记录 > 全量 */
-async function resolveArea(cfg: Config): Promise<Config["analyze"]["area"]> {
-  if (cfg.analyze.area) return cfg.analyze.area
-  if (cfg.analyze.range === "all") return null
+/**
+ * 按维度解析统计范围：显式 area > pregen 记录 > 全量。
+ *
+ * 每个维度范围不同（下界坐标 1:8，半径取主世界 1/8 才对应"走过同等距离"），
+ * 所以不能再用单一 Area。返回值键是配置里的维度名（overworld / the_nether）。
+ * 显式 `--area` 是单值的，会应用到所有维度。
+ */
+async function resolveAreas(cfg: Config): Promise<Map<string, Config["analyze"]["area"]>> {
+  const out = new Map<string, Config["analyze"]["area"]>()
+  const explicit = cfg.analyze.area
+  if (explicit) {
+    for (const d of cfg.analyze.dimensions) out.set(d, explicit)
+    return out
+  }
+  if (cfg.analyze.range === "all") {
+    for (const d of cfg.analyze.dimensions) out.set(d, null)
+    return out
+  }
+
   const p = join(serverDir(ROOT, cfg), "pregen-last.json")
   if (!(await exists(p))) {
     log.warn("没有预生成范围记录，按全量统计")
-    return null
+    for (const d of cfg.analyze.dimensions) out.set(d, null)
+    return out
   }
-  const rec = JSON.parse(await readFile(p, "utf8")) as { range?: { shape: "circle" | "square", center: [number, number], radius: number, chunkBounds?: { minX: number, maxX: number, minZ: number, maxZ: number } } }
-  if (!rec.range) {
-    log.warn("pregen-last.json 里没有 range 字段（旧记录），按全量统计")
-    return null
+
+  type Range = { dimension: string, shape: "circle" | "square", center: [number, number], radius: number, chunkBounds?: { minX: number, maxX: number, minZ: number, maxZ: number } }
+  const rec = JSON.parse(await readFile(p, "utf8")) as { ranges?: Range[], range?: Range }
+  // 旧记录只有单个 range；新记录是 ranges[]，按维度取
+  const ranges = rec.ranges ?? (rec.range ? [rec.range] : [])
+  if (!ranges.length) {
+    log.warn("pregen-last.json 里没有范围记录，按全量统计")
+    for (const d of cfg.analyze.dimensions) out.set(d, null)
+    return out
   }
-  return { ...rec.range }
+  for (const d of cfg.analyze.dimensions) {
+    const hit = ranges.find(r => r.dimension === d)
+    if (!hit) {
+      log.warn(`${d} 没有预生成范围记录，按全量统计`)
+      out.set(d, null)
+      continue
+    }
+    out.set(d, { shape: hit.shape, center: hit.center, radius: hit.radius, chunkBounds: hit.chunkBounds })
+  }
+  return out
 }
 
 async function cmdAnalyze(cfg: Config): Promise<void> {
@@ -143,18 +206,28 @@ async function cmdAnalyze(cfg: Config): Promise<void> {
   if (!found.some(Boolean)) throw new Error(`找不到存档 region 目录（试过：${dimDirs.join(", ")}）`)
   const modules = await resolveAnalyzers(cfg.analyze.analyzers, resolve(ROOT, cfg.analyze.pluginDir))
   const outDir = resolve(ROOT, cfg.analyze.outDir)
-  const area = await resolveArea(cfg)
-  log.info(area ? `统计范围：${describeArea(area)}` : "统计范围：全量")
+  const areas = await resolveAreas(cfg)
+  const areaDesc = [...areas.entries()]
+    .map(([d, a]) => `${d}: ${a ? describeArea(a) : "全量"}`)
+    .join(" | ")
+  log.info(`统计范围：${areaDesc}`)
   const serverJar = await vanillaServerJar(srvDir, cfg.minecraft.version)
-  const results = await runAnalysis({ cfg, worldDir, outDir, area, serverJar }, modules)
+  const target = await buildTarget({ cfg, serverDir: srvDir, worldDir, serverJar })
+  const results = await runAnalysis({ cfg, worldDir, outDir, areas, serverJar, target }, modules)
 
   console.log("\n=== 统计结果 ===")
   for (const r of results) {
     console.log(`- ${r.analyzer}: ${r.ok ? "ok" : "失败"} (${(r.durationMs / 1000).toFixed(2)}s)`)
     if (r.error) console.log(`    ${r.error}`)
     if (!r.ok) continue
-    const lines = modules.find(m => m.name === r.analyzer)?.format?.(r.result) ?? []
-    for (const line of lines) console.log(`    ${line}`)
+    const nested = (r.result ?? {}) as Record<string, unknown>
+    for (const [dim, value] of Object.entries(nested)) {
+      if (!value || typeof value !== "object") continue
+      const lines = modules.find(m => m.name === r.analyzer)?.format?.(value) ?? []
+      if (!lines.length) continue
+      console.log(`    [${dim}]`)
+      for (const line of lines) console.log(`      ${line}`)
+    }
   }
 }
 
@@ -168,7 +241,7 @@ async function cmdInfo(cfg: Config) {
     const mods = await exists(join(srvDir, "mods")) ? (await import("node:fs/promises")).readdir(join(srvDir, "mods")) : []
     console.log(`mods: ${(await mods).join(", ") || "(空)"}`)
   }
-  console.log(`预生成: ${cfg.pregen.dimension} ${cfg.pregen.shape} r=${cfg.pregen.radius} center=${cfg.pregen.center.join(",")}`)
+  console.log(`预生成: ${cfg.pregen.dimensions.map(t => `${t.dimension} ${t.shape} r=${t.radius} center=${t.center.join(",")}`).join(" | ")}`)
   const names = cfg.analyze.analyzers.length ? cfg.analyze.analyzers : await productionNames()
   console.log(`分析器: ${names.join(", ")}`)
   console.log(`统计目录: ${resolve(ROOT, cfg.analyze.outDir)}`)
@@ -184,7 +257,7 @@ async function main() {
 
   switch (cmd) {
     case "setup":
-      await cmdSetup(cfg, args)
+      await cmdSetup(cfg, args, base)
       await cmdInfo(cfg)
       break
     case "pregen":
@@ -194,7 +267,7 @@ async function main() {
       await cmdAnalyze(cfg)
       break
     case "run":
-      await cmdSetup(cfg, args)
+      await cmdSetup(cfg, args, base)
       await cmdPregen(cfg)
       await cmdAnalyze(cfg)
       break

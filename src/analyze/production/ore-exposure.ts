@@ -16,7 +16,8 @@ import type { Analyzer, AnalyzerModule, ChunkHandle } from "../types.js"
  * 只读本区块的话，贴边的矿石会大面积误判成「全埋」，unknownEdge 会虚高。
  */
 
-const DEFAULT_ORES = [
+/** 默认矿种：主世界（含深板岩变体）+ 下界。biome-ore 复用同一份列表，避免两处口径漂移 */
+export const DEFAULT_ORES = [
   "minecraft:coal_ore", "minecraft:deepslate_coal_ore",
   "minecraft:iron_ore", "minecraft:deepslate_iron_ore",
   "minecraft:copper_ore", "minecraft:deepslate_copper_ore",
@@ -97,6 +98,7 @@ function oreMatrixLines(m: OreMatrix, mode: "total" | "exposure", footer: Record
 const analyzer: AnalyzerModule = {
   name: "ore-exposure",
   description: "矿石的空气/水暴露数量，每区块/每区段平均",
+  units: { density: "per_chunk", sectionDensity: "per_chunk_per_section", share: "percent" },
   create(params): Analyzer {
     const p = (params["ore-exposure"] ?? {}) as Record<string, unknown>
     const oreSet = new Set(((p.ores as string[] | undefined) ?? DEFAULT_ORES).map(o => (o.includes(":") ? o : `minecraft:${o}`)))
@@ -215,17 +217,17 @@ const analyzer: AnalyzerModule = {
         }
       },
       finalize() {
-        /** 平均值（分母 = 区块数或区段覆盖区块数），保留两位小数 */
+        /** 平均值（分母 = 区块数或区段覆盖区块数）。产物保留原始浮点，取整只在 format 里做 */
         const avgStat = (c: Counts, denom: number): AvgStat => {
-          const a = (n: number) => (denom > 0 ? Number((n / denom).toFixed(2)) : 0)
+          const a = (n: number) => (denom > 0 ? n / denom : 0)
           return {
             avgTotal: a(c.total), avgAirExposed: a(c.air), avgWaterExposed: a(c.water),
             avgBoth: a(c.both), avgBuried: a(c.buried), avgUnknownEdge: a(c.unknownEdge),
-            airPct: c.total ? Number((c.air / c.total * 100).toFixed(2)) : 0,
-            waterPct: c.total ? Number((c.water / c.total * 100).toFixed(2)) : 0,
+            airPct: c.total ? c.air / c.total * 100 : 0,
+            waterPct: c.total ? c.water / c.total * 100 : 0,
           }
         }
-        const avgNum = (n: number, denom: number) => (denom > 0 ? Number((n / denom).toFixed(2)) : 0)
+        const avgNum = (n: number, denom: number) => (denom > 0 ? n / denom : 0)
         const sum = [...totals.values()].reduce((a, c) => {
           a.total += c.total; a.air += c.air; a.water += c.water; a.both += c.both; a.buried += c.buried; a.unknownEdge += c.unknownEdge
           return a
@@ -284,9 +286,9 @@ const analyzer: AnalyzerModule = {
     const r = result as { perChunk: AvgStat, byFamily: Record<string, AvgStat>, matrix?: OreMatrix }
     const ex = r.perChunk
     const lines = [
-      `每区块矿石 ${ex.avgTotal}：空气暴露 ${ex.avgAirExposed} (${ex.airPct}%)，水暴露 ${ex.avgWaterExposed} (${ex.waterPct}%)，两者 ${ex.avgBoth}，全埋 ${ex.avgBuried}`,
+      `每区块矿石 ${fmtAvg(ex.avgTotal)}：空气暴露 ${fmtAvg(ex.avgAirExposed)} (${fmtAvg(ex.airPct)}%)，水暴露 ${fmtAvg(ex.avgWaterExposed)} (${fmtAvg(ex.waterPct)}%)，两者 ${fmtAvg(ex.avgBoth)}，全埋 ${fmtAvg(ex.avgBuried)}`,
       ...Object.entries(r.byFamily).slice(0, 6).map(([f, v]) =>
-        `  ${f.padEnd(14)} 每区块 ${String(v.avgTotal).padStart(7)}  空气 ${String(v.avgAirExposed).padStart(5)}  水 ${String(v.avgWaterExposed).padStart(5)}`),
+        `  ${f.padEnd(14)} 每区块 ${fmtAvg(v.avgTotal).padStart(7)}  空气 ${fmtAvg(v.avgAirExposed).padStart(5)}  水 ${fmtAvg(v.avgWaterExposed).padStart(5)}`),
     ]
     if (r.matrix) {
       lines.push("", "数量（每区段每区块平均，行=区段，列=矿种）", ...oreMatrixLines(r.matrix, "total", r.byFamily))

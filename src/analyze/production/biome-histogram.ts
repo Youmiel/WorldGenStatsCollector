@@ -13,6 +13,7 @@ const AIR = 0
 const analyzer: AnalyzerModule = {
   name: "biome-histogram",
   description: "地表与地下两层生物群系占比（地下每列一票）",
+  units: { share: "percent" },
   create(): Analyzer {
     const surface = new Map<string, number>()
     const underground = new Map<string, number>()
@@ -27,7 +28,7 @@ const analyzer: AnalyzerModule = {
     const toList = (map: Map<string, number>, total: number) =>
       [...map.entries()]
         .sort((a, b) => b[1] - a[1])
-        .map(([id, n]) => ({ id, cells: n, share: Number((n / (total || 1) * 100).toFixed(3)) }))
+        .map(([id, n]) => ({ id, cells: n, share: n / (total || 1) * 100 }))
 
     return {
       name: "biome-histogram",
@@ -100,7 +101,7 @@ const analyzer: AnalyzerModule = {
             /** 整列都与地表相同、归入「其他」的列 */
             sameAsSurface: {
               columns: same,
-              share: Number((same / (sampled || 1) * 100).toFixed(3)),
+              share: same / (sampled || 1) * 100,
             },
             uniqueBiomes: underground.size,
             biomes: toList(underground, sampled),
@@ -116,16 +117,17 @@ const analyzer: AnalyzerModule = {
       underground: { columns: number, differing: number, sameAsSurface: { columns: number, share: number }, uniqueBiomes: number, biomes: { id: string, share: number }[] }
     }
     const u = r.underground
+    const f3 = (v: number) => v.toFixed(3)
     return [
       `地表 列数 ${r.columns}，群系 ${r.surface.uniqueBiomes} 个`,
-      ...r.surface.biomes.slice(0, 8).map(b => `  ${b.id.padEnd(34)} ${String(b.share).padStart(7)}%`),
+      ...r.surface.biomes.slice(0, 8).map(b => `  ${b.id.padEnd(34)} ${f3(b.share).padStart(7)}%`),
       u.columns
         ? `地下（仅主世界，每列一票） 列数 ${u.columns}，与地表不同 ${u.differing}（${(100 - u.sameAsSurface.share).toFixed(2)}%），群系 ${u.uniqueBiomes} 个`
         : "地下：没有样本（非主世界）",
       ...(u.columns
         ? [
-            ...u.biomes.slice(0, 8).map(b => `  ${b.id.padEnd(34)} ${String(b.share).padStart(7)}%`),
-            `  ${"其他(与地表相同)".padEnd(34)} ${String(u.sameAsSurface.share).padStart(7)}%`,
+            ...u.biomes.slice(0, 8).map(b => `  ${b.id.padEnd(34)} ${f3(b.share).padStart(7)}%`),
+            `  ${"其他(与地表相同)".padEnd(34)} ${f3(u.sameAsSurface.share).padStart(7)}%`,
           ]
         : []),
     ]

@@ -11,12 +11,13 @@ import type { Analyzer, AnalyzerModule, ChunkHandle } from "../types.js"
  */
 interface Section { y: number, chunks: number, total: number, counts: Map<string, number> }
 
-/** 每区块（或每区段）平均，保留两位小数 */
-const avg = (n: number, denom: number) => (denom > 0 ? Number((n / denom).toFixed(2)) : 0)
+/** 每区块（或每区段）平均。产物保留原始浮点，取整只在 format 里做 */
+const avg = (n: number, denom: number) => (denom > 0 ? n / denom : 0)
 
 const analyzer: AnalyzerModule = {
   name: "section-block-histogram",
   description: "按 16 格区段统计全部方块的每区块平均数量与占比",
+  units: { sectionDensity: "per_chunk_per_section", share: "percent" },
   create(params): Analyzer {
     const p = params["section-block-histogram"] as Record<string, unknown> | undefined
     const includeAir = Boolean(p?.includeAir ?? false)
@@ -75,7 +76,7 @@ const analyzer: AnalyzerModule = {
             avgTotal: avg(s.total, s.chunks),
             blocks: [...s.counts.entries()]
               .sort((a, b) => b[1] - a[1])
-              .map(([id, n]) => ({ id, avg: avg(n, s.chunks), share: Number((n / s.total * 100).toFixed(3)) })),
+              .map(([id, n]) => ({ id, avg: avg(n, s.chunks), share: n / s.total * 100 })),
           }))
         return {
           chunks,
@@ -95,10 +96,10 @@ const analyzer: AnalyzerModule = {
       top: number
       sections: { y: number, yRange: [number, number], chunks: number, avgTotal: number, blocks: { id: string, avg: number, share: number }[] }[]
     }
-    const lines = [`区块 ${r.chunks}，每区块平均方块 ${r.avgBlocksPerChunk}，区段 ${r.sections.length} 个`]
+    const lines = [`区块 ${r.chunks}，每区块平均方块 ${r.avgBlocksPerChunk.toFixed(2)}，区段 ${r.sections.length} 个`]
     for (const s of r.sections) {
       const top = s.blocks.slice(0, r.top)
-        .map(b => `${b.id.replace("minecraft:", "")} ${b.avg} (${b.share.toFixed(1)}%)`)
+        .map(b => `${b.id.replace("minecraft:", "")} ${b.avg.toFixed(2)} (${b.share.toFixed(1)}%)`)
         .join("  ")
       lines.push(`  ${`${s.yRange[0]}~${s.yRange[1]}`.padStart(9)}  ${top}`)
     }

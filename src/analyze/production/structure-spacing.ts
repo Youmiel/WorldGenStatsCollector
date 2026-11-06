@@ -25,8 +25,6 @@ interface Bounds { minX: number, maxX: number, minZ: number, maxZ: number }
 
 const KEY = "structure-spacing"
 
-const round = (v: number, digits: number) => Number(v.toFixed(digits))
-
 /** 最近邻距离（方块）：每个点到同集合其它起点的最小距离 */
 function nearestNeighbours(points: Point[]): number[] {
   const out = new Array<number>(points.length).fill(0)
@@ -60,6 +58,7 @@ function median(v: number[]): number | null {
 const analyzer: AnalyzerModule = {
   name: KEY,
   description: "按结构集合统计结构起点之间的平均间距（方块/区块）",
+  units: { distance: "block", spacing: "chunk" },
   create(params): Analyzer {
     const p = (params[KEY] ?? {}) as { sets?: unknown }
     const only = Array.isArray(p.sets)
@@ -152,16 +151,16 @@ const analyzer: AnalyzerModule = {
             count: g.points.length,
             setKnown: g.known,
             structureIds: [...g.ids].sort(),
-            meanNNBlocks: m === null ? null : round(m, 1),
-            meanNNChunks: m === null ? null : round(m / 16, 2),
-            medianNNBlocks: med === null ? null : round(med, 1),
-            medianNNChunks: med === null ? null : round(med / 16, 2),
-            minNNBlocks: nn.length ? round(Math.min(...nn), 1) : null,
-            maxNNBlocks: nn.length ? round(Math.max(...nn), 1) : null,
+            meanNNBlocks: m,
+            meanNNChunks: m === null ? null : m / 16,
+            medianNNBlocks: med,
+            medianNNChunks: med === null ? null : med / 16,
+            minNNBlocks: nn.length ? Math.min(...nn) : null,
+            maxNNBlocks: nn.length ? Math.max(...nn) : null,
             trimmed: trimmedMean === null ? null : {
               count: keptNN.length,
-              meanNNBlocks: round(trimmedMean, 1),
-              meanNNChunks: round(trimmedMean / 16, 2),
+              meanNNBlocks: trimmedMean,
+              meanNNChunks: trimmedMean / 16,
             },
             configured: set ? { spacingChunks: set.spacing, separationChunks: set.separation } : null,
           }
@@ -190,13 +189,13 @@ const analyzer: AnalyzerModule = {
     const lines = [`结构起点 ${r.structureStarts}，集合 ${r.groups.length} 个`]
     const head = `  ${"集合".padEnd(30)}${"数量".padStart(6)}${"平均间距(区块)".padStart(16)}${"平均(方块)".padStart(11)}${"中位(区块)".padStart(11)}${"配置".padStart(9)}`
     lines.push(head)
-    const fmt = (v: number | null) => (v === null ? "-" : String(v))
+    const fmt = (v: number | null) => (v === null ? "-" : String(Number(v.toFixed(2))))
     let trimmedUsed = false
     for (const g of r.groups) {
       const t = g.trimmed
       if (t) trimmedUsed = true
-      const avg = t ? `${t.meanNNChunks}*` : fmt(g.meanNNChunks)
-      const avgBlocks = t ? `${t.meanNNBlocks}*` : fmt(g.meanNNBlocks)
+      const avg = t ? `${fmt(t.meanNNChunks)}*` : fmt(g.meanNNChunks)
+      const avgBlocks = t ? `${fmt(t.meanNNBlocks)}*` : fmt(g.meanNNBlocks)
       lines.push(
         `  ${g.set.padEnd(30)}${String(g.count).padStart(6)}${avg.padStart(16)}${avgBlocks.padStart(11)}${fmt(g.medianNNChunks).padStart(11)}${fmt(g.configured?.spacingChunks ?? null).padStart(9)}`,
       )

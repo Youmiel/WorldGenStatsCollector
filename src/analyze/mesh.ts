@@ -161,9 +161,7 @@ const bucketOf = (blocks: number): string => {
   return "32+"
 }
 
-const round = (v: number, digits: number) => Number(v.toFixed(digits))
-
-/** 边长的均值 / 中位 / 分位数 / 分桶分布 */
+/** 边长的均值 / 中位 / 分位数 / 分桶分布。产物保留原始浮点，取整只在 CLI 显示层 */
 export function summarizeEdges(lengths: number[]): EdgeSummary {
   const n = lengths.length
   if (!n) {
@@ -178,7 +176,7 @@ export function summarizeEdges(lengths: number[]): EdgeSummary {
   const sum = sorted.reduce((a, b) => a + b, 0)
   const mid = n >> 1
   const med = n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
-  const quantile = (q: number) => round(sorted[Math.min(n - 1, Math.floor(q * (n - 1)))], 1)
+  const quantile = (q: number) => sorted[Math.min(n - 1, Math.floor(q * (n - 1)))]
 
   const hist = new Map<string, number>()
   for (const l of lengths) {
@@ -188,12 +186,12 @@ export function summarizeEdges(lengths: number[]): EdgeSummary {
 
   return {
     count: n,
-    meanBlocks: round(sum / n, 1),
-    meanChunks: round(sum / n / 16, 2),
-    medianBlocks: round(med, 1),
-    medianChunks: round(med / 16, 2),
-    minBlocks: round(sorted[0], 1),
-    maxBlocks: round(sorted[n - 1], 1),
+    meanBlocks: sum / n,
+    meanChunks: sum / n / 16,
+    medianBlocks: med,
+    medianChunks: med / 16,
+    minBlocks: sorted[0],
+    maxBlocks: sorted[n - 1],
     quantiles: { p25: quantile(0.25), p50: quantile(0.5), p75: quantile(0.75), p90: quantile(0.9) },
     histogram: BUCKETS.map(range => ({ range, edges: hist.get(range) ?? 0 })),
   }

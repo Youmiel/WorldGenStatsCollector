@@ -68,6 +68,8 @@ export interface Analyzer {
 export interface AnalyzerModule {
   name: string
   description?: string
+  /** 产物 `units` 字段：本分析器各数值的单位，避免下游从 note 散文里猜 */
+  units?: Record<string, string>
   /** 每次运行创建一个新实例，保证多次运行/多维度互不污染 */
   create(params: Record<string, unknown>): Analyzer
   /** 控制台摘要（可选）：接收 finalize 的结果，返回相对缩进的行，CLI 每行再缩进 4 格 */

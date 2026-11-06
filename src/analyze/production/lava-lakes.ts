@@ -99,8 +99,6 @@ interface LakeGroup {
   members: number
 }
 
-const round = (v: number, digits: number) => Number(v.toFixed(digits))
-
 function mean(v: number[]): number | null {
   if (!v.length) return null
   return v.reduce((a, b) => a + b, 0) / v.length
@@ -146,12 +144,12 @@ function spacingStatFromNN(nn: number[]): SpacingStat {
   const med = median(nn)
   return {
     count: nn.length,
-    meanNNBlocks: m === null ? null : round(m, 1),
-    meanNNChunks: m === null ? null : round(m / 16, 2),
-    medianNNBlocks: med === null ? null : round(med, 1),
-    medianNNChunks: med === null ? null : round(med / 16, 2),
-    minNNBlocks: nn.length ? round(Math.min(...nn), 1) : null,
-    maxNNBlocks: nn.length ? round(Math.max(...nn), 1) : null,
+    meanNNBlocks: m,
+    meanNNChunks: m === null ? null : m / 16,
+    medianNNBlocks: med,
+    medianNNChunks: med === null ? null : med / 16,
+    minNNBlocks: nn.length ? Math.min(...nn) : null,
+    maxNNBlocks: nn.length ? Math.max(...nn) : null,
   }
 }
 
@@ -167,6 +165,7 @@ function numParam(v: unknown, dflt: number): number {
 const analyzer: AnalyzerModule = {
   name: KEY,
   description: "岩浆湖间距（地表，每片连通 >= 6 方块，剔除陡坡）与地下岩浆每区块平均面积",
+  units: { distance: "block", area: "block^2", density: "per_chunk", share: "percent" },
   create(params): Analyzer {
     const p = (params[KEY] ?? {}) as Record<string, unknown>
     const yThreshold = numParam(p.yThreshold, DEFAULT_Y_THRESHOLD)
@@ -399,11 +398,11 @@ const analyzer: AnalyzerModule = {
               const ri = lfind(i), rj = lfind(j)
               if (ri !== rj) lParent[rj] = ri
               merges.push({
-                distance: round(d, 1),
+                distance: d,
                 aSize: lakes[i].size,
                 bSize: lakes[j].size,
-                x: round((lakes[i].x + lakes[j].x) / 2, 1),
-                z: round((lakes[i].z + lakes[j].z) / 2, 1),
+                x: (lakes[i].x + lakes[j].x) / 2,
+                z: (lakes[i].z + lakes[j].z) / 2,
               })
             }
           }
@@ -549,7 +548,9 @@ const analyzer: AnalyzerModule = {
          */
         let viz: { file: string, scale: number, width: number, height: number } | null = null
         if (visualize) {
-          const file = join(ctx.runtime.outDir, `${KEY}-map.png`)
+          // 每个维度一个实例、同一个 outDir；主世界保持原名，其它维度加后缀避免互相覆盖
+          const dimTag = dimension.replace(/^minecraft:/, "").replace(/[^a-z0-9_-]/gi, "_")
+          const file = join(ctx.runtime.outDir, `${KEY}${dimension === "overworld" ? "" : `-${dimTag}`}-map.png`)
           try {
             await renderTerrainMap({
               terrain,
@@ -593,12 +594,12 @@ const analyzer: AnalyzerModule = {
             discarded,
             /** 属于合格岩浆湖的方块数 */
             lakeBlocks,
-            avgLakeSize: lakes.length ? round(lakeBlocks / lakes.length, 2) : 0,
+              avgLakeSize: lakes.length ? lakeBlocks / lakes.length : 0,
             /** 质心距离 < mergeGap 的湖合并后的组 */
             groups: {
               count: groups.length,
               mergedPairs: merges.length,
-              avgSize: groups.length ? round(lakeBlocks / groups.length, 2) : 0,
+              avgSize: groups.length ? lakeBlocks / groups.length : 0,
             },
             /** 被合并的湖对明细（距离升序，最多 20 条） */
             merges: merges.sort((a, b) => a.distance - b.distance).slice(0, 20),
@@ -638,14 +639,14 @@ const analyzer: AnalyzerModule = {
               columns: terrainColumns,
               water: waterColumns,
               land: landColumns,
-              waterSharePct: terrainColumns ? round(waterColumns / terrainColumns * 100, 2) : 0,
+              waterSharePct: terrainColumns ? waterColumns / terrainColumns * 100 : 0,
               /** 陆地列折算成区块数（256 列 = 1 区块） */
-              landChunksEquivalent: round(landChunks, 1),
+              landChunksEquivalent: landChunks,
             },
             /** 按陆地面积归一化的湖密度：海洋不该稀释湖泊生成频率 */
             density: {
-              lakesPer1000LandChunks: landChunks > 0 ? round(lakes.length / landChunks * 1000, 2) : null,
-              groupsPer1000LandChunks: landChunks > 0 ? round(groups.length / landChunks * 1000, 2) : null,
+              lakesPer1000LandChunks: landChunks > 0 ? lakes.length / landChunks * 1000 : null,
+              groupsPer1000LandChunks: landChunks > 0 ? groups.length / landChunks * 1000 : null,
             },
           },
           underground: {
@@ -653,11 +654,11 @@ const analyzer: AnalyzerModule = {
             lavaBlocks: undergroundBlocks,
             chunksWithLava: undergroundChunks,
             /** 每区块平均地下岩浆方块数 */
-            avgBlocksPerChunk: round(undergroundBlocks / denom, 2),
+            avgBlocksPerChunk: undergroundBlocks / denom,
             /** 每区块平均水平覆盖面积（列数，1 列 = 1 方块²） */
-            avgAreaPerChunk: round(undergroundColumns / denom, 2),
+            avgAreaPerChunk: undergroundColumns / denom,
             /** 覆盖面积占区块水平面积（256 列）的比例 */
-            areaSharePct: round(undergroundColumns / (denom * 256) * 100, 3),
+            areaSharePct: undergroundColumns / (denom * 256) * 100,
           },
           note: "岩浆湖 = 6 面连通的 lava 源方块（level=0）区域，每片连通区域只算一次；地表判定为 y >= yThreshold；地面高度取自 MOTION_BLOCKING_NO_LEAVES 并向下跳过原木，陡坡 = 湖泊包围盒外扩 slopeSampleOffset 的环上 3x3 地面高差中位数 >= slopeThreshold，超阈值的湖整片剔除；水域 = MOTION_BLOCKING > OCEAN_FLOOR，只用于水域/陆地面积与密度归一化；质心距离 < mergeGap 的湖合并为一组再算间距；mesh 只保留直线不穿过不可用地形 tile 的边",
           visual: viz,
@@ -731,11 +732,12 @@ const analyzer: AnalyzerModule = {
       }
     }
     const s = r.surface, u = r.underground, g = s.groups, lw = s.landWater
-    const fmt = (v: number | null) => (v === null ? "-" : String(v))
+    /** 显示层取整：产物保留原始浮点，这里只控制控制台宽度 */
+    const fmt = (v: number | null) => (v === null ? "-" : String(Number(v.toFixed(2))))
     const yRange = s.yRange ? ` ${s.yRange[0]}~${s.yRange[1]}` : ""
     const lines = [
       `区块 ${r.chunks}，地表岩浆湖(y>=${r.yThreshold}${yRange}) 连通 ${s.clusters} 片 → 合格 ${s.lakes} 片 → 合并后 ${g.count} 组`,
-      `  连通 >= ${r.minLakeSize} 方块，共 ${s.lakeBlocks} 方块，平均 ${g.avgSize}/组；丢弃碎块 ${s.discarded}，因距离 < ${r.mergeGap} 合并 ${g.mergedPairs} 对`,
+      `  连通 >= ${r.minLakeSize} 方块，共 ${s.lakeBlocks} 方块，平均 ${fmt(g.avgSize)}/组；丢弃碎块 ${s.discarded}，因距离 < ${r.mergeGap} 合并 ${g.mergedPairs} 对`,
     ]
 
     if (s.slope.enabled) {
@@ -748,10 +750,10 @@ const analyzer: AnalyzerModule = {
     }
 
     lines.push(
-      `  水域/陆地（Heightmaps）: 列 ${lw.columns}，水域 ${lw.water}(${lw.waterSharePct}%)，陆地 ${lw.land}（≈${lw.landChunksEquivalent} 区块）`,
+      `  水域/陆地（Heightmaps）: 列 ${lw.columns}，水域 ${lw.water}(${fmt(lw.waterSharePct)}%)，陆地 ${lw.land}（≈${fmt(lw.landChunksEquivalent)} 区块）`,
     )
     if (s.density.lakesPer1000LandChunks !== null) {
-      lines.push(`  陆地归一化密度: ${s.density.lakesPer1000LandChunks} 湖 / 1000 陆地区块，${s.density.groupsPer1000LandChunks} 组 / 1000 陆地区块`)
+      lines.push(`  陆地归一化密度: ${fmt(s.density.lakesPer1000LandChunks)} 湖 / 1000 陆地区块，${fmt(s.density.groupsPer1000LandChunks)} 组 / 1000 陆地区块`)
     }
 
     const sp = s.spacingTerrain, eu = s.spacing, ip = s.spacingInterior, tf = s.spacingTerrainFilter
@@ -784,12 +786,12 @@ const analyzer: AnalyzerModule = {
           `  三角 mesh（同区且不跨不可用地形）: ${m.edges}/${m.edgesTotal} 条边可用（剔除 ${m.edgesRejected}：跨水域 ${m.rejectByReason.water} / 跨陡坡 ${m.rejectByReason.steep}）`,
         )
         lines.push(
-          `    均值 ${m.meanEdgeChunks} 区块（${m.meanEdgeBlocks} 方块），中位 ${m.medianEdgeChunks} 区块，最小 ${m.minEdgeBlocks} 方块，最大 ${m.maxEdgeBlocks} 方块`,
+          `    均值 ${fmt(m.meanEdgeChunks)} 区块（${fmt(m.meanEdgeBlocks)} 方块），中位 ${fmt(m.medianEdgeChunks)} 区块，最小 ${fmt(m.minEdgeBlocks)} 方块，最大 ${fmt(m.maxEdgeBlocks)} 方块`,
         )
         lines.push(`    边长分布 ${hist}`)
         const q = m.quantiles
         lines.push(
-          `    分位数 p25 ${q.p25} / p50 ${q.p50} / p75 ${q.p75} / p90 ${q.p90} 方块`,
+          `    分位数 p25 ${fmt(q.p25)} / p50 ${fmt(q.p50)} / p75 ${fmt(q.p75)} / p90 ${fmt(q.p90)} 方块`,
         )
       } else {
         lines.push(`  三角 mesh：mask 校验后没有可用边（原始 ${m.edgesTotal} 条全部跨越不可用地形）`)
@@ -798,7 +800,7 @@ const analyzer: AnalyzerModule = {
     if (r.visual) {
       lines.push(`  可视化 ${r.visual.file}（${r.visual.width}x${r.visual.height}，1px = ${r.visual.scale} 方块）`)
     }
-    lines.push(`地下岩浆(y<${r.yThreshold}) 每区块平均 ${u.avgBlocksPerChunk} 方块，覆盖面积 ${u.avgAreaPerChunk} 方块²（占区块水平面积 ${u.areaSharePct}%），含岩浆区块 ${u.chunksWithLava}/${r.chunks}`)
+    lines.push(`地下岩浆(y<${r.yThreshold}) 每区块平均 ${fmt(u.avgBlocksPerChunk)} 方块，覆盖面积 ${fmt(u.avgAreaPerChunk)} 方块²（占区块水平面积 ${fmt(u.areaSharePct)}%），含岩浆区块 ${u.chunksWithLava}/${r.chunks}`)
     return lines
   },
 }

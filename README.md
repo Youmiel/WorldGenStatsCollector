@@ -30,7 +30,9 @@ node dist/cli.js run --radius 512
 
 常用参数：`--version`、`--loader`、`--seed`、`--mem`、`--radius`、`--shape`、`--center`、`--dimension`、`--timeout`、`--analyzers`、`--all`、`--area`、`--area-shape`、`--no-boot`、`--update-installer`、`--force`、`--verbose`。
 
-CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长期改配置请直接改文件。`--all` 指统计全量范围，`--analyzers all` 指运行全部分析器，两者互不相关。
+`--radius` / `--shape` / `--center` 只改 `--dimension` 指定的那个维度；不写 `--dimension` 则改配置里的全部维度。只写 `--dimension` 而不带范围参数时，表示本次只预生成该维度。
+
+CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；唯一例外是 `--seed`：种子必须落盘才能复现，会写回配置。`--all` 指统计全量范围，`--analyzers all` 指运行全部分析器，两者互不相关。
 
 `server.dir` 支持 `{version}` 占位符，默认 `.server/{version}`，即每个 MC 版本一个独立服务端目录（world / mods / config 全隔离）；`--server-dir` 指定字面路径，同样支持占位符。
 
@@ -46,18 +48,24 @@ CLI 参数只对本次运行生效，不写回 `worldgen.config.json`；要长�
   "server": {
     "dir": ".server/{version}", "memoryMB": 2048,
     "javaPath": null,                                     // null = 用 PATH 里的 java
-    "levelName": "world", "seed": ""
+    "levelName": "world", "seed": ""                 // 空 = setup 时生成随机种子并写回，保证可复现
   },
   "mods": {
     "chunky": true, "c2me": true, "fabricApi": true,
     "c2meThreads": 4, "c2mePriority": null                 // null = 不干预 c2me 的 threadPoolPriorityPreset
   },
-  "pregen": { "dimension": "overworld", "shape": "circle", "center": [0, 0], "radius": 256 },
+  "pregen": {
+    "dimensions": [                                       // 每个维度一个目标，依次预生成
+      { "dimension": "overworld", "shape": "circle", "center": [0, 0], "radius": 256 },
+      { "dimension": "the_nether", "shape": "square", "center": [0, 0], "radius": 32 },   // 下界坐标 1:8，取主世界 1/8
+      { "dimension": "the_end", "shape": "square", "center": [0, 0], "radius": 256 }
+    ]
+  },
   "analyze": {
     "range": "pregen",          // pregen = 用预生成记录的范围；all = 全量
-    "area": null,               // 显式范围 { shape, center, radius }，优先于 range
+    "area": null,               // 显式范围 { shape, center, radius }，优先于 range 且应用于全部维度
     "outDir": "stats",
-    "dimensions": ["overworld"],
+    "dimensions": ["overworld", "the_nether", "the_end"],   // 要统计的维度，命名空间形式也可（minecraft:overworld）
     "analyzers": [],            // 空 = 只跑生产分析器；all = 全部；也可写名字
     "pluginDir": "analyzers",
     "params": {}                // 原样透传给分析器
@@ -127,6 +135,19 @@ export default {
 <分析器名>.json
 summary.json
 ```
+
+每个 `<分析器名>.json` 的顶层固定为：
+
+- `schemaVersion`：当前为 `2`
+- `target`：Minecraft 版本、`levelName`、种子与 `seedMode`、数据包及内容哈希、服务端 jar 哈希
+- `range`：统计范围的结构化形式（shape / center / radius / boundChunks / 扫描与跳过区块数 / skippedReason）；多维度时为各维度之和
+- `rangeByDimension`：按维度分列的上项，键为 `minecraft:overworld` 这类命名空间形式
+- `units`：本分析器数值的单位
+- `config`：该分析器的参数
+- `ok` / `errors` / `unsupported`：失败的维度与跳过的条目
+- `result`：按维度嵌套，键名同上；每个维度用独立的分析器实例
+
+数值字段一律保留原始浮点，不四舍五入——下游可能需要反算或比较；取整只发生在控制台摘要里。
 
 ## 多版本并存
 

@@ -1,22 +1,25 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { join } from "node:path"
 import { read } from "minecraft-block-reader"
 import type { ChunkRef, Entity, World } from "minecraft-block-reader"
 import { dimensionDirs, dimensionEntityDirs } from "../lib/server.js"
 import type { Area, Config } from "../lib/config.js"
-import { chunkInArea, describeArea } from "./range.js"
+import { chunkInArea } from "./range.js"
 import { readRegionChunkNbt } from "./chunk-nbt.js"
 import { log } from "../lib/util.js"
+import type { TargetInfo } from "./target.js"
 import type { Analyzer, AnalyzerContext, AnalyzerModule, AnalysisRunResult, ChunkHandle, RegionSession } from "./types.js"
 
 export interface AnalyzeOptions {
   cfg: Config
   worldDir: string
   outDir: string
-  /** 统计范围；null 表示全量 */
-  area: Area | null
+  /** 每个维度的统计范围（键为配置里的维度名）；不在表里或值为 null 则全量 */
+  areas: Map<string, Area | null>
   /** 原版服务端 jar（数据包数据来源），没有就 null */
   serverJar?: string | null
+  /** 产物头部标识（版本/种子/数据包） */
+  target: TargetInfo
 }
 
 /**
@@ -125,7 +128,55 @@ async function listRegions(
   return out.sort((a, b) => a.x - b.x || a.z - b.z)
 }
 
-/** 跑一个分析器，独立 try/catch，一个崩了不影响其它 */
+/** 维度 ID 统一成命名空间形式：overworld → minecraft:overworld */
+export function namespaceDimension(d: string): string {
+  return d.includes(":") ? d : `minecraft:${d}`
+}
+
+export interface RangeInfo {
+  shape: "circle" | "square" | "all"
+  center: [number, number] | null
+  radius: number | null
+  boundChunks: { x: [number, number], z: [number, number] } | null
+  chunksScanned: number
+  chunksSkipped: number
+  /** chunksSkipped 的含义：是「范围内未生成」还是「范围外已生成」 */
+  skippedReason: string | null
+}
+
+function rangeInfo(area: Area | null, scanned: number, skipped: number): RangeInfo {
+  if (!area) {
+    return {
+      shape: "all",
+      center: null,
+      radius: null,
+      boundChunks: null,
+      chunksScanned: scanned,
+      chunksSkipped: skipped,
+      // 全量统计时 skipped 恒为 0；但作为多维度汇总行时这里可能带的是各维度之和，
+      // 所以不能无条件写 null，按实际值给出原因
+      skippedReason: skipped > 0 ? "部分维度按范围过滤，此处为各维度汇总" : null,
+    }
+  }
+  const b = area.chunkBounds
+  return {
+    shape: area.shape,
+    center: area.center,
+    radius: area.radius,
+    boundChunks: b ? { x: [b.minX, b.maxX], z: [b.minZ, b.maxZ] } : null,
+    chunksScanned: scanned,
+    chunksSkipped: skipped,
+    // skipped 是「world 内存在、但落在统计范围外」的区块数，不是范围内还没生成的
+    skippedReason: skipped > 0 ? "world 内含超出该统计范围的区块，已跳过" : null,
+  }
+}
+
+/**
+ * 跑一个分析器，独立 try/catch，一个崩了不影响其它。
+ *
+ * 每个维度用独立的 analyzer 实例：分析器内部不需要自己按维度分桶，
+ * 结果天然落到 result[namespaceDimension(dim)] 下，跨维度的数字不会混在同一个键里。
+ */
 export async function runAnalysis(opts: AnalyzeOptions, modules: AnalyzerModule[]): Promise<AnalysisRunResult[]> {
   const { cfg } = opts
   const params = cfg.analyze.params as Record<string, unknown>
@@ -134,31 +185,45 @@ export async function runAnalysis(opts: AnalyzeOptions, modules: AnalyzerModule[
   const outDir = join(opts.outDir, runId)
   await mkdir(outDir, { recursive: true })
   const runtime = { worldDir: opts.worldDir, serverJar: opts.serverJar ?? null, outDir }
+  const dimensions = cfg.analyze.dimensions.map(namespaceDimension)
+  // 各分析器扫的是同一批区块，总量在循环里重置累计，最后一份即 summary 用的数字
+  let lastScanned = 0, lastSkipped = 0
+  let lastRanges: Record<string, RangeInfo> = {}
 
   for (const mod of modules) {
-    const analyzer = mod.create(params)
-    const { ctx, store } = contextFor(analyzer, params, runtime)
     const t0 = Date.now()
-    let ok = true, error: string | undefined, result: unknown
+    const result: Record<string, unknown> = {}
+    const errors: { dimension: string, message: string }[] = []
+    const unsupported: { item: string, reason: string }[] = []
+    /** 每个维度各自的范围统计；单维度的旧字段取第一个维度的值，保持向后可读 */
+    const ranges: Record<string, RangeInfo> = {}
     let scanned = 0, skipped = 0
-    try {
-      for (const dim of cfg.analyze.dimensions) {
+
+    for (const dim of cfg.analyze.dimensions) {
+      const ns = namespaceDimension(dim)
+      const area = opts.areas.get(dim) ?? null
+      const analyzer = mod.create(params)
+      const { ctx, store } = contextFor(analyzer, params, runtime)
+      let dimScanned = 0, dimSkipped = 0
+      try {
         const regions = await listRegions(opts.worldDir, dim)
         if (!regions.length) {
-          log.warn(`${dim}: 没找到 region 文件（${opts.worldDir}）`)
+          log.warn(`${mod.name}: ${dim} 没找到 region 文件（${opts.worldDir}）`)
+          unsupported.push({ item: `dimension:${ns}`, reason: "没有 region 文件" })
+          result[ns] = null
+          ranges[ns] = rangeInfo(area, 0, 0)
           continue
         }
-        log.info(`${analyzer.name}: ${dim} ${regions.length} 个 region${opts.area ? "，按范围过滤区块" : ""}`)
+        log.info(`${mod.name}: ${dim} ${regions.length} 个 region${area ? "，按范围过滤区块" : ""}`)
         for (const r of regions) {
           // 单个 .mca 整文件读入（10MB 级）；reader 的 blob 惰性读取只对 zip 世界生效。
           // world.chunks 只列 header 里真实存在的区块，不是 1024 个槽位。
           const bytes = await readFile(r.path)
           if (!bytes.length) continue
           const world = await read(bytes, { region: [r.x, r.z] }) as World
-          const area = opts.area
           const chunks = area ? world.chunks.filter(c => chunkInArea(c.cx, c.cz, area)) : world.chunks
-          scanned += chunks.length
-          skipped += world.chunks.length - chunks.length
+          dimScanned += chunks.length
+          dimSkipped += world.chunks.length - chunks.length
           if (!chunks.length) continue
           const session: RegionSession = { dimension: dim, x: r.x, z: r.z, path: r.path, world, chunks, bytes, entityPath: r.entityPath }
           await analyzer.onRegion?.(session, ctx)
@@ -173,39 +238,55 @@ export async function runAnalysis(opts: AnalyzeOptions, modules: AnalyzerModule[
             }
           }
         }
+        const finalized = await analyzer.finalize?.(ctx)
+        result[ns] = finalized === undefined ? { ...store } : { ...store, ...(finalized as object) }
+      } catch (e) {
+        const message = (e as Error).message
+        errors.push({ dimension: ns, message })
+        result[ns] = null
+        log.error(`${mod.name} @ ${ns} 失败：${message}`)
       }
-      const finalized = await analyzer.finalize?.(ctx)
-      result = finalized === undefined ? { ...store } : { ...store, ...(finalized as object) }
-    } catch (e) {
-      ok = false
-      error = (e as Error).message
-      log.error(`${analyzer.name} 失败：${error}`)
+      scanned += dimScanned
+      skipped += dimSkipped
+      ranges[ns] = rangeInfo(area, dimScanned, dimSkipped)
     }
+
     const durationMs = Date.now() - t0
+    lastScanned = scanned
+    lastSkipped = skipped
+    lastRanges = ranges
+    const ok = errors.length === 0
     const payload = {
-      analyzer: analyzer.name,
-      description: analyzer.description,
+      analyzer: mod.name,
+      description: mod.description,
+      schemaVersion: 2,
       generatedAt: new Date().toISOString(),
-      world: basename(opts.worldDir),
-      dimensions: cfg.analyze.dimensions,
-      area: opts.area ? describeArea(opts.area) : "all",
-      chunksScanned: scanned,
-      chunksSkipped: skipped,
-      durationMs,
+      target: opts.target,
+      /** 全局汇总（各维度之和）；分维度明细见 rangeByDimension */
+      range: rangeInfo(null, scanned, skipped),
+      rangeByDimension: ranges,
+      units: mod.units ?? {},
+      config: (params[mod.name] ?? {}) as Record<string, unknown>,
       ok,
-      error,
+      errors,
+      unsupported,
+      durationMs,
       result,
     }
-    await writeFile(join(outDir, `${analyzer.name}.json`), JSON.stringify(payload, null, 2), "utf8")
-    results.push({ analyzer: analyzer.name, description: analyzer.description, ok, error, durationMs, result })
-    log.info(`${analyzer.name} 完成 ${(durationMs / 1000).toFixed(2)}s`)
+    await writeFile(join(outDir, `${mod.name}.json`), JSON.stringify(payload, null, 2), "utf8")
+    results.push({ analyzer: mod.name, description: mod.description, ok, error: errors[0]?.message, durationMs, result })
+    log.info(`${mod.name} 完成 ${(durationMs / 1000).toFixed(2)}s`)
   }
 
   await writeFile(join(outDir, "summary.json"), JSON.stringify({
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
+    target: opts.target,
     world: opts.worldDir,
-    dimensions: cfg.analyze.dimensions,
-    area: opts.area ? describeArea(opts.area) : "all",
+    dimensions,
+    /** 全局汇总（各维度之和）；分维度明细见 rangeByDimension */
+    range: rangeInfo(null, lastScanned, lastSkipped),
+    rangeByDimension: lastRanges,
     analyzers: results.map(r => ({ name: r.analyzer, ok: r.ok, error: r.error, durationMs: r.durationMs })),
   }, null, 2), "utf8")
   log.info(`结果已写入 ${outDir}`)

@@ -9,6 +9,7 @@
     "javaPath": null,
     "levelName": "world",
     "seed": "",
+    "seedSource": null,
     "levelType": "minecraft:normal",
     "viewDistance": 10,
     "simulationDistance": 6,
@@ -26,13 +27,35 @@
     "c2mePriority": null
   },
   "pregen": {
-    "dimension": "overworld",
-    "shape": "square",
-    "center": [
-      0,
-      0
+    "dimensions": [
+      {
+        "dimension": "overworld",
+        "shape": "square",
+        "center": [
+          0,
+          0
+        ],
+        "radius": 256
+      },
+      {
+        "dimension": "the_nether",
+        "shape": "square",
+        "center": [
+          0,
+          0
+        ],
+        "radius": 32
+      },
+      {
+        "dimension": "the_end",
+        "shape": "square",
+        "center": [
+          0,
+          0
+        ],
+        "radius": 256
+      }
     ],
-    "radius": 256,
     "timeoutMinutes": 60,
     "settleSeconds": 5
   },
@@ -41,7 +64,9 @@
     "area": null,
     "outDir": "stats",
     "dimensions": [
-      "overworld"
+      "overworld",
+      "the_nether",
+      "the_end"
     ],
     "analyzers": [],
     "pluginDir": "analyzers",
