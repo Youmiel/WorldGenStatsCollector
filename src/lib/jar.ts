@@ -71,3 +71,18 @@ export async function readJarJson(prefix: string, jarPath: string): Promise<{ pa
   }
   return out
 }
+
+/**
+ * 读 jar 里某一个具体路径的 JSON（按 zip 中央目录定位，不解压其它条目）。
+ * 不存在、不是有效 JSON、或 jar 本身打不开时返回 null——调用方按「读不到」处理，不抛错。
+ */
+export async function readJarJsonEntry(path: string, jarPath: string): Promise<unknown | null> {
+  try {
+    const bytes = new Uint8Array(await readFile(jarPath))
+    const entry = listZipEntries(bytes).find(e => e.name === path)
+    if (!entry) return null
+    return JSON.parse(new TextDecoder().decode(readZipEntry(bytes, entry))) as unknown
+  } catch {
+    return null
+  }
+}

@@ -28,9 +28,24 @@ export interface PregenResult {
 //   Task finished for minecraft:overworld. Processed: 289 chunks (100.00%), Total time: 0:00:07
 //   Task stopped  for minecraft:overworld.
 // 完成判定只看 Task finished（有 Processed 数）；被 cancel 时只有 Task stopped。
-const RUNNING = /Task running for .*?Processed:\s*([\d,]+) chunks \((\d+(?:\.\d+)?)%\)/
-const FINISHED = /Task finished for .*?Processed:\s*([\d,]+) chunks/
-const STOPPED = /Task stopped for/
+//
+// 正则必须锚定当前维度：同一进程里依次跑多个维度，不锚定就会命中上一个维度的
+// Task finished 行，把「还没开始」误判成「已完成」——下界/末地一个区块都不生成，
+// 记录里却写着 67081 chunks 就是这么来的。
+const logWorldName = (dim: string) => (dim.includes(":") ? dim : `minecraft:${dim}`)
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+function chunkyPatterns(dim: string) {
+  const world = escapeRe(logWorldName(dim))
+  return {
+    running: new RegExp(`Task running for ${world}\\. Processed:\\s*([\\d,]+) chunks \\((\\d+(?:\\.\\d+)?)%\\)`),
+    finished: new RegExp(`Task finished for ${world}\\. Processed:\\s*([\\d,]+) chunks`),
+    stopped: new RegExp(`Task stopped for ${world}\\.`),
+    started: new RegExp(`Task started in ${world} for the`),
+    /** 该维度有上次没跑完的 paused 任务：start 会被拒绝，必须 confirm 覆盖 */
+    alreadyStarted: /A task was already started for this world/,
+  }
+}
 
 /**
  * 选区的外接方形区块包围盒（不区分形状）。
@@ -115,12 +130,15 @@ async function pregenOne(
 ): Promise<{ range: PregenRange, chunks: number, finished: boolean }> {
   const world = chunkyWorldName(t.dimension)
   const { shape, center, radius } = t
+  const patterns = chunkyPatterns(t.dimension)
+  // 只在本次命令之后的行里找结果行：缓冲区里还有上一个维度的 Task finished
+  const from = server.lineCount
 
   let lastLogged = 0
   let lastPercent = 0
   let lastChunks = 0
   const unbind = server.onLine(line => {
-    const m = line.match(RUNNING)
+    const m = line.match(patterns.running)
     if (!m) return
     lastChunks = Number(m[1].replace(/,/g, ""))
     lastPercent = Number(m[2])
@@ -140,8 +158,21 @@ async function pregenOne(
     server.send(`chunky radius ${radius}`)
     server.send("chunky start")
 
-    const finishedLine = await server.waitFor(l => FINISHED.test(l) || STOPPED.test(l), { timeoutMs })
-    const fm = finishedLine.match(FINISHED)
+    // 先确认任务真的开始了：该维度可能有上次中断留下的 paused 任务，start 会被拒绝
+    const ack = await server.waitFor(
+      l => patterns.started.test(l) || patterns.alreadyStarted.test(l)
+        || patterns.finished.test(l) || patterns.stopped.test(l),
+      { timeoutMs, from },
+    )
+    if (patterns.alreadyStarted.test(ack)) {
+      log.warn(`预生成 ${world}：该维度有上次未跑完的任务，start 被拒绝；用 confirm 覆盖旧任务`)
+      server.send("chunky confirm")
+    }
+
+    const finishedLine = patterns.finished.test(ack) || patterns.stopped.test(ack)
+      ? ack
+      : await server.waitFor(l => patterns.finished.test(l) || patterns.stopped.test(l), { timeoutMs, from })
+    const fm = finishedLine.match(patterns.finished)
     const chunks = fm ? Number(fm[1].replace(/,/g, "")) : lastChunks
     log.info(`预生成 ${world} 完成：${fm ? `${chunks} chunks` : "任务被停止"}`)
     return {

@@ -149,11 +149,21 @@ export async function tuneC2me(serverDir: string, threads: number | null, priori
 
 export interface WaitOptions {
   timeoutMs?: number
+  /**
+   * 只从第 from 行之后开始匹配（默认 0 = 含全部历史）。
+   *
+   * 历史扫描是为了避开「日志已到、waitFor 后注册」的竞态；但同一进程里跑多个
+   * 阶段时它也会误命中上一阶段的行（例如上一个维度的 Task finished），
+   * 需要在发出命令前记下 lineCount 再传进来。
+   */
+  from?: number
 }
 
 export class MinecraftServer {
   private proc: ChildProcessWithoutNullStreams | null = null
   private lines: string[] = []
+  /** 已从缓冲区头部丢弃的行数：对外的行号是「已丢弃 + 缓冲内下标」 */
+  private droppedLines = 0
   private waiters: { predicate: (l: string) => boolean, resolve: (l: string) => void, reject: (e: Error) => void, timer: NodeJS.Timeout }[] = []
   private exited = false
   readonly logPath: string
@@ -188,7 +198,10 @@ export class MinecraftServer {
         const line = stripAnsi(raw).trimEnd()
         if (!line) continue
         this.lines.push(line)
-        if (this.lines.length > 4000) this.lines.splice(0, 1000)
+        if (this.lines.length > 4000) {
+          this.lines.splice(0, 1000)
+          this.droppedLines += 1000
+        }
         for (const fn of this.listeners) {
           try { fn(line) } catch { /* 监听器异常不影响主流程 */ }
         }
@@ -216,12 +229,16 @@ export class MinecraftServer {
     proc.stdin.on("error", () => { /* 进程已退出时的 EPIPE，忽略 */ })
   }
 
+  /** 当前已缓冲的日志行数；发给服务端命令前记下来，可当 waitFor 的起点 */
+  get lineCount() { return this.droppedLines + this.lines.length }
+
   /** 等待匹配日志行 */
   waitFor(predicate: (l: string) => boolean, opts: WaitOptions): Promise<string> {
     const timeoutMs = opts.timeoutMs ?? 120_000
-    // 先扫历史，避免竞态
-    for (const l of this.lines) {
-      if (predicate(l)) return Promise.resolve(l)
+    // 先扫历史，避免竞态；from 之后的才扫，防止命中上一阶段的日志
+    const start = Math.max(0, (opts.from ?? 0) - this.droppedLines)
+    for (let i = start; i < this.lines.length; i++) {
+      if (predicate(this.lines[i])) return Promise.resolve(this.lines[i])
     }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
