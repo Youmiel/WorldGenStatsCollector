@@ -14,6 +14,7 @@ const analyzer: AnalyzerModule = {
   name: "biome-histogram",
   description: "地表与地下两层生物群系占比（地下每列一票）",
   units: { share: "percent" },
+  parallelCost: 3.2,
   create(): Analyzer {
     const surface = new Map<string, number>()
     const underground = new Map<string, number>()

@@ -147,7 +147,11 @@ function clusterSizes(points: Point3[], radius: number, height: number): number[
 const analyzer: AnalyzerModule = {
   name: KEY,
   description: "实体/动物数量与每区块平均密度（分陆生、水生、敌对、NPC）",
+  // 测的是世界生成时放置的实体（被动生物群），只有主世界有；
+  // 怪物是刷怪产物，与这里的口径无关，不要靠本分析器统计。
+  dimensions: ["overworld"],
   units: { density: "per_chunk", count: "entity" },
+  parallelCost: 0.5,
   create(params): Analyzer {
     const p = (params[KEY] ?? {}) as Record<string, unknown>
     const onlyLiving = p.onlyLiving !== false

@@ -65,16 +65,78 @@ export interface Analyzer {
   finalize?(ctx: AnalyzerContext): Promise<unknown> | unknown
 }
 
+/** 一个分析器模块的完整形状（`create` 必填，其余由分析器按需声明） */
 export interface AnalyzerModule {
   name: string
   description?: string
+  /**
+   * 适用的维度（不写 = 全部维度都适用）。接受 `overworld` / `minecraft:overworld` 两种写法。
+   * 不在列表里的维度不会执行本分析器，而是记入 `unsupported` 并写明原因 ——
+   * 口径只对某个维度成立时（例如岩浆湖的 yThreshold 是主世界高度）用它，
+   * 别让一个只对主世界有意义的数字落到下界/末地的结果里。
+   */
+  dimensions?: string[]
   /** 产物 `units` 字段：本分析器各数值的单位，避免下游从 note 散文里猜 */
   units?: Record<string, string>
+  /**
+   * 产物按维度拆成多个文件（默认 false = 全部写进 `<name>.json`）。
+   *
+   * 用于单维度结果就很大、放一个文件不便按需读取的分析器（`ore-stats` 的主世界
+   * 就有近 1MB）。开启后：
+   * - 主文件 `<name>.json` 只含元信息，`result` 为空对象，另给 `resultFiles`
+   *   记录「维度 → 文件名」的映射；
+   * - 每个维度写一个 `<name>.<维度简写>.json`，结构与本分析器的常规产物完全一致，
+   *   只是 `result` 里只有那一个维度。
+   *
+   * 下游读法：先读主文件拿 `resultFiles`，再按需读对应维度文件。
+   */
+  splitByDimension?: boolean
+  /**
+   * 并行调度的**相对代价**：独占跑一次本分析器的耗时。
+   *
+   * 单位任意，但必须跨分析器可比（通常以最慢的那个记 10 等比折算）。
+   * 框架只用它做 worker 负载均衡，不影响任何产物内容；不写按 2 计。
+   *
+   * 注意记的是**独占跑**的代价，不是串行时观测到的耗时：能蹭别人 memo 的分析器
+   * 串行时看起来很快，一旦被分到别的 worker 就要自己付全额解码成本。
+   *
+   * 由分析器自己声明，是因为只有它知道自己扫了多少数据；框架不该认识具体插件。
+   */
+  parallelCost?: number
+  /**
+   * 并行**亲和键**：同一键的分析器会被尽量分到同一个 worker。
+   *
+   * 适用于「读同一批原始 NBT」的分析器——`ChunkHandle` 的 memo 只在同一个
+   * worker 内共享，分开就要各解一遍（实测代价可达上百秒）。
+   *
+   * 键名自取，只需相关分析器写同一个值。亲和是「尽量」：若目标分组已明显超载，
+   * 框架会放弃亲和以保证负载均衡（正确性不受影响，只是多付一次解码）。
+   */
+  parallelGroup?: string
   /** 每次运行创建一个新实例，保证多次运行/多维度互不污染 */
   create(params: Record<string, unknown>): Analyzer
   /** 控制台摘要（可选）：接收 finalize 的结果，返回相对缩进的行，CLI 每行再缩进 4 格 */
   format?(result: unknown): string[]
 }
+
+/**
+ * 「我不是分析器」的约定声明。
+ *
+ * 分析器目录（`production/`、`examples/`、`plugins`）里除了分析器，还可能需要放
+ * **共享库**——被多个分析器复用的领域知识或工具（例如 `production/landmarks.ts`，
+ * 由结构统计的两个分析器共用）。这类模块只要导出这个字段，
+ * 加载器就会静默跳过，不会因为缺少 `name` / `create()` 而告警。
+ *
+ * 为什么用声明而不是目录层级：目录分层会让「这个文件该放哪」变成每次都要判断的事，
+ * 而声明是一次说清、永久生效，且与 `parallelCost` / `parallelGroup` 同一思路——
+ * 插件告诉框架自己是什么，框架只做通用检测，不按文件名猜。
+ *
+ * 用法：
+ * ```ts
+ * export const notAnAnalyzer = true
+ * ```
+ */
+export const NOT_AN_ANALYZER_KEY = "notAnAnalyzer"
 
 export interface AnalysisRunResult {
   analyzer: string

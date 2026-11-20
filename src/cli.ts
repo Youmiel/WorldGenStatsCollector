@@ -84,6 +84,7 @@ async function applyOverrides(cfg: Config, args: Args): Promise<Config> {
   }
   if (args.timeout) c.pregen.timeoutMinutes = Number(args.timeout)
   if (args.analyzers) c.analyze.analyzers = String(args.analyzers).split(",").map(s => s.trim()).filter(Boolean)
+  if (args.parallel !== undefined) c.analyze.parallel = Number(args.parallel)
   return c
 }
 
@@ -147,8 +148,49 @@ async function cmdPregen(cfg: Config): Promise<void> {
   })
   const res = await runPregen({ server, cfg, logPath: serverLogPath(srv.dir) })
   const out = join(srv.dir, "pregen-last.json")
-  await import("node:fs/promises").then(fs => fs.writeFile(out, JSON.stringify(res, null, 2)))
+  // 只覆盖本次跑过的维度：用 --dimension 单独补跑某个维度时，
+  // 其它维度已生成的范围记录仍然有效，不该被丢掉
+  const merged = mergePregenRecord(await readPregenRecord(out), res)
+  await import("node:fs/promises").then(fs => fs.writeFile(out, JSON.stringify(merged, null, 2)))
   log.info(`预生成记录 ${out}`)
+}
+
+interface PregenRangeRecord {
+  dimension: string
+  shape: "circle" | "square"
+  center: [number, number]
+  radius: number
+  chunkBounds: { minX: number, maxX: number, minZ: number, maxZ: number }
+}
+
+interface PregenRecord {
+  ranges: PregenRangeRecord[]
+  started?: string
+  finished?: string
+  chunks?: number
+  percent?: number
+  elapsedMs?: number
+  logPath?: string
+}
+
+/** 读已有的预生成记录；旧版单 range 形态也认 */
+async function readPregenRecord(path: string): Promise<PregenRecord | null> {
+  if (!(await exists(path))) return null
+  try {
+    const raw = JSON.parse(await readFile(path, "utf8")) as Partial<PregenRecord> & { range?: PregenRangeRecord }
+    const ranges = raw.ranges ?? (raw.range ? [raw.range] : [])
+    return ranges.length ? { ...raw, ranges } : null
+  } catch {
+    return null
+  }
+}
+
+/** 本次跑过的维度覆盖旧记录，其余维度保留 */
+function mergePregenRecord(prev: PregenRecord | null, cur: PregenRecord): PregenRecord {
+  const ran = new Set(cur.ranges.map(r => r.dimension))
+  const kept = (prev?.ranges ?? []).filter(r => !ran.has(r.dimension))
+  const ranges = [...kept, ...cur.ranges].sort((a, b) => a.dimension.localeCompare(b.dimension))
+  return { ...cur, ranges }
 }
 
 /**
@@ -171,23 +213,14 @@ async function resolveAreas(cfg: Config): Promise<Map<string, Config["analyze"][
   }
 
   const p = join(serverDir(ROOT, cfg), "pregen-last.json")
-  if (!(await exists(p))) {
+  const rec = await readPregenRecord(p)
+  if (!rec?.ranges.length) {
     log.warn("没有预生成范围记录，按全量统计")
     for (const d of cfg.analyze.dimensions) out.set(d, null)
     return out
   }
-
-  type Range = { dimension: string, shape: "circle" | "square", center: [number, number], radius: number, chunkBounds?: { minX: number, maxX: number, minZ: number, maxZ: number } }
-  const rec = JSON.parse(await readFile(p, "utf8")) as { ranges?: Range[], range?: Range }
-  // 旧记录只有单个 range；新记录是 ranges[]，按维度取
-  const ranges = rec.ranges ?? (rec.range ? [rec.range] : [])
-  if (!ranges.length) {
-    log.warn("pregen-last.json 里没有范围记录，按全量统计")
-    for (const d of cfg.analyze.dimensions) out.set(d, null)
-    return out
-  }
   for (const d of cfg.analyze.dimensions) {
-    const hit = ranges.find(r => r.dimension === d)
+    const hit = rec.ranges.find(r => r.dimension === d)
     if (!hit) {
       log.warn(`${d} 没有预生成范围记录，按全量统计`)
       out.set(d, null)
@@ -311,6 +344,7 @@ async function main() {
   --area-shape <circle|square>
   --timeout <min>        预生成超时
   --analyzers <a,b>      指定分析器（默认只跑生产分析器；all = 全部，examples = 示例）
+  --parallel <n>         分析器并行度（worker 线程数；默认串行。实测 3 最划算）
   --no-boot              setup 后不启动服务端
   --update-installer     强制检查/更新 fabric-installer
   --force                重装服务端

@@ -4,7 +4,7 @@
   "description": "Minecraft 世界生成统计：Fabric 服务端自动装配 + Chunky 预生成 + 存档解析统计",
   "main": "dist/cli.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('OUTPUTS.md','dist/OUTPUTS.md')\"",
     "wgs": "node dist/cli.js",
     "setup": "node dist/cli.js setup",
     "pregen": "node dist/cli.js pregen",

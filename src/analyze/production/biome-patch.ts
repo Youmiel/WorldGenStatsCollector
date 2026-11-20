@@ -73,6 +73,7 @@ function patchStat(areas: number[], edgeTouches: number): PatchStat {
 const analyzer: AnalyzerModule = {
   name: KEY,
   description: "群系斑块规模：4 连通连通分量的面积分布、边界接触、邻接与地表开放性",
+  parallelCost: 0.5,
   units: {
     area: "block^2",
     distance: "block",

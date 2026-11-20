@@ -16,11 +16,42 @@ const stamp = () => {
   const s = ((Date.now() - t0) / 1000).toFixed(1).padStart(6, " ")
   return `[${s}s]`
 }
+
+/* ------------------------------------------------------------------ */
+/* 单行进度显示                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 进度必须画在**同一行**上，而日志是整行输出——两者混写就会出现
+ * 「日志插在进度条中间」「进度条残留半截」的样子。
+ *
+ * 所以进度状态集中在这里：`progressWrite` 覆盖当前行，任何 `log.*`
+ * 输出前先调 `progressClear` 把这一行抹掉，日志因此永远是完整独立的行。
+ * 非 TTY（重定向到文件、CI）下直接不画：`\r` 会让日志文件变成一行乱码。
+ */
+let progressDrawn = false
+
+export function progressSupported(): boolean {
+  return Boolean(process.stdout.isTTY)
+}
+
+export function progressWrite(text: string): void {
+  if (!process.stdout.isTTY) return
+  process.stdout.write(`\r\x1b[K${text}`)
+  progressDrawn = true
+}
+
+export function progressClear(): void {
+  if (!progressDrawn) return
+  process.stdout.write("\r\x1b[K")
+  progressDrawn = false
+}
+
 export const log = {
-  debug: (...a: unknown[]) => order[level] <= 10 && console.log(stamp(), ...a),
-  info: (...a: unknown[]) => order[level] <= 20 && console.log(stamp(), ...a),
-  warn: (...a: unknown[]) => order[level] <= 30 && console.warn(stamp(), "WARN", ...a),
-  error: (...a: unknown[]) => order[level] <= 40 && console.error(stamp(), "ERR ", ...a),
+  debug: (...a: unknown[]) => { if (order[level] <= 10) { progressClear(); console.log(stamp(), ...a) } },
+  info: (...a: unknown[]) => { if (order[level] <= 20) { progressClear(); console.log(stamp(), ...a) } },
+  warn: (...a: unknown[]) => { if (order[level] <= 30) { progressClear(); console.warn(stamp(), "WARN", ...a) } },
+  error: (...a: unknown[]) => { if (order[level] <= 40) { progressClear(); console.error(stamp(), "ERR ", ...a) } },
 }
 
 export async function exists(path: string): Promise<boolean> {

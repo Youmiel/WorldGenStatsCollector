@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { join, resolve } from "node:path"
 import type { AnalyzerModule } from "./types.js"
+import { NOT_AN_ANALYZER_KEY } from "./types.js"
 import { log } from "../lib/util.js"
 
 /**
@@ -12,6 +13,9 @@ import { log } from "../lib/util.js"
  *
  * 三类共用同一个加载器，判定标准一致：默认导出或具名导出（`mod.default ?? mod`）
  * 一个 `{ name, create(params) }` 对象。加生产分析器只需往 production/ 丢一个文件。
+ *
+ * 目录里也可以放共享库（被多个分析器复用的知识/工具），用 `notAnAnalyzer`
+ * 声明后加载器会跳过——不需要为「辅助文件放哪」另外发明目录约定。
  */
 
 const BUILTIN_DIRS = {
@@ -21,6 +25,10 @@ const BUILTIN_DIRS = {
 
 /**
  * 从目录加载分析器。
+ *
+ * 目录里除了分析器还可以放**共享库**（例如 `production/landmarks.ts`，由多个
+ * 结构分析器共用）。这类文件用 `export const notAnAnalyzer = true` 声明自己，
+ * 加载器见到就静默跳过——约定字段优先于按文件名或目录层级猜。
  *
  * reload=true 时给 import URL 加时间戳绕过模块缓存 —— 外部目录的文件用户可能边跑边改；
  * 内置目录不加，靠模块缓存避免重复解析（两者都在单次进程运行里只加载一次）。
@@ -41,9 +49,11 @@ async function loadAnalyzersFromDir(
     const url = pathToFileURL(resolve(join(dir, f))).href
     try {
       const mod = await import(opts.reload ? `${url}?t=${Date.now()}` : url)
+      // 共享库：文件自己声明不是分析器，静默跳过
+      if ((mod as Record<string, unknown>)[NOT_AN_ANALYZER_KEY] === true) continue
       const m = (mod.default ?? mod) as Partial<AnalyzerModule>
       if (typeof m?.create !== "function" || typeof m?.name !== "string") {
-        log.warn(`${opts.label} ${f} 不是有效的分析器（需要 name + create()）`)
+        log.warn(`${opts.label} ${f} 不是有效的分析器（需要 name + create()；共享库请加 export const notAnAnalyzer = true）`)
         continue
       }
       out.push(m as AnalyzerModule)
