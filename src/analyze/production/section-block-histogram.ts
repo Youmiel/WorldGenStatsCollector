@@ -9,7 +9,7 @@ import type { Analyzer, AnalyzerModule, ChunkHandle } from "../types.js"
  *
  * params: { includeAir?, top? }
  */
-interface Section { y: number, chunks: number, total: number, counts: Map<string, number> }
+interface Section { y: number, chunks: number, total: number, counts: Uint32Array }
 
 /** 每区块（或每区段）平均。产物保留原始浮点，取整只在 format 里做 */
 const avg = (n: number, denom: number) => (denom > 0 ? n / denom : 0)
@@ -18,12 +18,30 @@ const analyzer: AnalyzerModule = {
   name: "section-block-histogram",
   description: "按 16 格区段统计全部方块的每区块平均数量与占比",
   units: { sectionDensity: "per_chunk_per_section", share: "percent" },
+  parallelCost: 1.0,
   create(params): Analyzer {
     const p = params["section-block-histogram"] as Record<string, unknown> | undefined
     const includeAir = Boolean(p?.includeAir ?? false)
     const top = Number(p?.top ?? 3)
 
     const sections = new Map<number, Section>()
+    /**
+     * 全局方块编号：逐方块用字符串 Map 计数是这里的主要开销（主世界约 4.6 亿次 Map.set）。
+     * 每个区块的色板先映射到全局编号，之后计数就只是 Uint32Array 自增。
+     */
+    const globalIds = new Map<string, number>()
+    const globalNames: string[] = []
+    let idCount = 0
+    const idOf = (id: string): number => {
+      let i = globalIds.get(id)
+      if (i === undefined) {
+        i = idCount++
+        globalIds.set(id, i)
+        globalNames.push(id)
+      }
+      return i
+    }
+
     let chunks = 0
     let counted = 0
 
@@ -37,30 +55,46 @@ const analyzer: AnalyzerModule = {
         if (h <= 0 || grid.grid.length !== h * 256) return
         chunks++
 
+        // 色板 → 全局编号（+1 是因为 grid 的 0 表示空气）
+        const pal = new Uint32Array(grid.palette.length + 1)
+        for (let i = 0; i < grid.palette.length; i++) pal[i + 1] = idOf(grid.palette[i].id)
+        const airId = includeAir ? idOf("minecraft:air") : -1
+
         // 同一区段在一个区块里会出现多行，只记一次分母
         const seen = new Set<number>()
         for (let yi = 0; yi < h; yi++) {
           const sy = Math.floor((ext.bottom + yi) / 16) * 16
           let s = sections.get(sy)
-          if (!s) { s = { y: sy, chunks: 0, total: 0, counts: new Map() }; sections.set(sy, s) }
+          if (!s) {
+            s = { y: sy, chunks: 0, total: 0, counts: new Uint32Array(0) }
+            sections.set(sy, s)
+          }
           if (!seen.has(sy)) { seen.add(sy); s.chunks++ }
+          if (s.counts.length < idCount) {
+            const grown = new Uint32Array(idCount)
+            grown.set(s.counts)
+            s.counts = grown
+          }
 
           const base = yi * 256
+          const counts = s.counts
+          let added = 0
           for (let i = 0; i < 256; i++) {
             const v = grid.grid[base + i]
             if (v === 0) {
-              if (!includeAir) continue
-              s.counts.set("minecraft:air", (s.counts.get("minecraft:air") ?? 0) + 1)
-              s.total++
-              counted++
+              if (airId < 0) continue
+              counts[airId]++
+              added++
               continue
             }
-            const id = grid.palette[v - 1]?.id
-            if (!id) continue
-            s.counts.set(id, (s.counts.get(id) ?? 0) + 1)
-            s.total++
-            counted++
+            const gid = pal[v]
+            // 越界的调色板索引说明区块数据异常，跳过而不是记到 0 号上
+            if (gid === undefined) continue
+            counts[gid]++
+            added++
           }
+          s.total += added
+          counted += added
         }
       },
       finalize() {
@@ -75,8 +109,9 @@ const analyzer: AnalyzerModule = {
             /** 每区块该区段的方块总数（不含空气） */
             avgTotal: avg(s.total, s.chunks),
             blocks: [...s.counts.entries()]
+              .filter(([, n]) => n > 0)
               .sort((a, b) => b[1] - a[1])
-              .map(([id, n]) => ({ id, avg: avg(n, s.chunks), share: n / s.total * 100 })),
+              .map(([gid, n]) => ({ id: globalNames[gid], avg: avg(n, s.chunks), share: n / s.total * 100 })),
           }))
         return {
           chunks,
