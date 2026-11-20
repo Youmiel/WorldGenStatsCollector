@@ -48,6 +48,16 @@ const isSoft = (id: string) => SOFT_NAMES.has(id) || SOFT_SUFFIX.test(id)
 /** 水/冰：海洋、河流、湖泊、冰面都算水域 */
 export const isWaterLike = (id: string) => id === "minecraft:water" || ICE.test(id)
 
+/** 长在地表之上、但不构成地形的方块名（竹子、甘蔗、仙人掌等，不被 SOFT_SUFFIX 覆盖） */
+const DECORATION_NAMES = /(^|:)(bamboo|bamboo_sapling|sugar_cane|cactus)$/
+
+/**
+ * 是否属于「地表装饰/植被」：求一列地形高度时应当跳过。
+ * 树叶、原木、竹子会把地表抬高，若不跳过，紧贴它们的空气会被判成「地下」。
+ */
+export const isGroundDecoration = (id: string) =>
+  isSoft(id) || LOG.test(id) || LEAVES.test(id) || DECORATION_NAMES.test(id)
+
 /* ------------------------------------------------------------------ */
 /* Heightmaps                                                          */
 /* ------------------------------------------------------------------ */
@@ -245,9 +255,28 @@ export interface ColumnTerrain {
 export class TerrainIndex {
   private chunks = new Map<number, ChunkTerrain>()
   private slopeCache = new Map<number, number | null>()
+  /**
+   * slopeCache 的条目上限。
+   *
+   * `pathUsable` 会沿两点连线逐格采样，每格写一条缓存；统计范围扩大后（例如主世界
+   * 半径 4096 方块），湖泊两两配对的距离总和可达数千万格，缓存条目会撞上 V8 `Map`
+   * 的硬上限（2^24 ≈ 1677 万条，报 "Map maximum size exceeded" 并抛出）。
+   *
+   * 缓存只是加速：清空后重新计算的结果完全相同，所以这里按条目数做容量保护，
+   * 超过就整表清空（不清一半——Map 迭代序是插入序，清一半会留下最旧的、
+   * 而最旧的恰恰是概率最低被再次命中的）。
+   */
+  private static readonly MAX_SLOPE_CACHE = 1_000_000
+  /** 因超限被清空的次数；正常规模下恒为 0，非 0 说明采样量已接近容量上限 */
+  private slopeCacheFlushes = 0
 
   add(cx: number, cz: number, t: ChunkTerrain): void {
     this.chunks.set(packXZ(cx, cz), t)
+  }
+
+  /** slopeCache 被清空的次数（诊断用） */
+  get cacheFlushes(): number {
+    return this.slopeCacheFlushes
   }
 
   get chunkCount(): number {
@@ -300,6 +329,11 @@ export class TerrainIndex {
       }
     }
     const out = n >= 5 ? max - min : null
+    // 超过容量上限就整表清空：保留不了「最近用过的」，那就全丢，靠重算换稳定内存。
+    if (this.slopeCache.size >= TerrainIndex.MAX_SLOPE_CACHE) {
+      this.slopeCache.clear()
+      this.slopeCacheFlushes++
+    }
     this.slopeCache.set(key, out)
     return out
   }
@@ -334,23 +368,30 @@ export class TerrainIndex {
    */
   pathUsable(
     x0: number, z0: number, x1: number, z1: number,
-    opts: { slopeThreshold: number, skip?: number, maxBlockedRun?: number },
+    opts: { slopeThreshold: number, skip?: number, maxBlockedRun?: number, step?: number },
   ): boolean | null {
     const skip = opts.skip ?? 0
     const maxRun = Math.max(1, opts.maxBlockedRun ?? 1)
+    // 采样步长。默认 1（逐格）；`maxBlockedRun` 较大时（例如 16）可以取几格一步，
+    // 跳过一整段恰好等于 maxBlockedRun 的非法带的概率极低，而采样量按倍数下降——
+    // 大范围（几十万区块、几百个湖两两配对）下这一步是内存与耗时的主要来源。
+    const stepLen = Math.max(1, Math.trunc(opts.step ?? 1))
     const dx = x1 - x0, dz = z1 - z0
-    const steps = Math.max(Math.abs(dx), Math.abs(dz))
-    if (steps <= skip * 2) return true
+    const span = Math.max(Math.abs(dx), Math.abs(dz))
+    if (span <= skip * 2) return true
     let unknown = false
     let run = 0
-    for (let i = skip; i <= steps - skip; i++) {
-      const t = steps === 0 ? 0 : i / steps
+    for (let d = skip; d <= span - skip; d += stepLen) {
+      const t = span === 0 ? 0 : d / span
       const x = Math.round(x0 + dx * t)
       const z = Math.round(z0 + dz * t)
       const ok = this.isUsable(x, z, opts.slopeThreshold)
       if (ok === null) { unknown = true; run = 0; continue }
       if (ok) { run = 0; continue }
-      if (++run >= maxRun) return false
+      // 采样步长 > 1 时，一次采样代表 [d, d+stepLen) 这一段：整段都按非法计才与
+      // 逐格语义等价，这里按「跳过的格数」累加，避免步长把 maxBlockedRun 缩小。
+      run += stepLen
+      if (run >= maxRun) return false
     }
     return unknown ? null : true
   }

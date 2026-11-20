@@ -165,6 +165,11 @@ function numParam(v: unknown, dflt: number): number {
 const analyzer: AnalyzerModule = {
   name: KEY,
   description: "岩浆湖间距（地表，每片连通 >= 6 方块，剔除陡坡）与地下岩浆每区块平均面积",
+  // 口径全部按主世界设计：yThreshold 60 是主世界地表/地下分界、Heightmaps 依赖主世界
+  // min_y = -64、陡坡与水域判定也是主世界地形。下界的岩浆海在 y=31 会被整片算成「地下」，
+  // 末地根本没有岩浆湖 —— 与其给出一个口径不成立的数字，不如声明不适用。
+  dimensions: ["overworld"],
+  parallelCost: 2.8,
   units: { distance: "block", area: "block^2", density: "per_chunk", share: "percent" },
   create(params): Analyzer {
     const p = (params[KEY] ?? {}) as Record<string, unknown>
@@ -467,6 +472,9 @@ const analyzer: AnalyzerModule = {
                 slopeThreshold,
                 skip,
                 maxBlockedRun: spacingMaxBlockedRun,
+                // 连续 spacingMaxBlockedRun 格非法才算地形带，逐格采样没必要：
+                // 湖数随统计范围平方增长，逐格采样会把缓存顶到 Map 容量上限。
+                step: Math.min(4, spacingMaxBlockedRun),
               })
               if (ok === false) { rejectedByTerrain++; continue }
               nn.push(c.d)
@@ -613,6 +621,9 @@ const analyzer: AnalyzerModule = {
               rejectedPairs: rejectedByTerrain,
               isolatedGroups: allNN.isolated,
               maxBlockedRun: spacingMaxBlockedRun,
+              pathStep: Math.min(4, spacingMaxBlockedRun),
+              /** 坡度缓存的清空次数：非 0 表示采样量已撞到容量保护，耗时会被拉长 */
+              slopeCacheFlushes: terrain.cacheFlushes,
             },
             /** mask + Delaunay mesh：只在同一片合法地形区内部连边 */
             mesh,
