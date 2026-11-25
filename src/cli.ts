@@ -344,7 +344,7 @@ async function main() {
   --area-shape <circle|square>
   --timeout <min>        预生成超时
   --analyzers <a,b>      指定分析器（默认只跑生产分析器；all = 全部，examples = 示例）
-  --parallel <n>         分析器并行度（worker 线程数；默认串行。实测 3 最划算）
+  --parallel <n>         分析器并行度（worker 线程数；默认 4，0/1 = 串行）
   --no-boot              setup 后不启动服务端
   --update-installer     强制检查/更新 fabric-installer
   --force                重装服务端

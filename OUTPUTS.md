@@ -167,7 +167,12 @@
 
 ## ore-stats
 
-群系级资源方块密度与暴露。主世界按下表地表群系归属，下界按方块所在位置的群系单元归属。
+群系级资源方块密度与暴露，归属口径由维度决定：
+
+- 主世界按地表群系：该列最高非空气方块处的群系，与 `biome-histogram` 同口径
+- 下界 / 末地按原地群系单元：矿石自身所在位置的群系，因为下界群系按 4³ 单元三维分布
+
+因此下界的矿石密度与暴露率可以直接按群系比较。
 
 | 字段 | 含义 |
 |---|---|
@@ -243,6 +248,15 @@
 | `landmarks[]` | 地形特征类地标（无 start、无 BB），见下 |
 | `totals` | 各结构汇总：`structures`、`starts`、`pieces`、`volume` |
 
+`pieces` 由 `structures.starts` 的 `Children` 展开（`BB` 是体素包围盒）；`structures.References` 记录每个区块参与了哪些实例，同一区块可以同时属于多个同类型实例。
+
+`templates` 按模板路径分组，用于「每实例产出 = Σ_模板 (该模板每实例次数 × 该模板单份内容)」。路径有两种存法，互不重叠：
+
+- 拼图类结构（试炼密室、村庄、遗迹小径、堡垒遗迹）：`pool_element.location`
+- 模板类结构（冰屋、沉船、海底废墟、废弃传送门）：`Template`
+
+矿井、要塞这类硬编码部件结构两者都没有，片段计入 `piecesWithoutTemplate`，`templates` 为空数组（不是全 0，避免把「口径不适用」误读成「模板真的没出现」）。
+
 `landmarks[]` 的字段：
 
 | 字段 | 含义 |
@@ -250,7 +264,7 @@
 | `id` | 地标 ID，如 `minecraft:desert_well` |
 | `set` | 结构集合 ID，如 `minecraft:desert_wells`（与下游 `template_prefixes` 对齐） |
 | `blocks` | 实测到的可疑方块数 |
-| `blocksPerInstance` | 每个实例含几个可疑方块，读自 jar 的 `worldgen/feature/<id>.json`；读不到用 `blocks / count` |
+| `blocksPerInstance` | 每个实例含几个可疑方块，读自 jar 的 `worldgen/feature/<id>.json`（数含 `suspicious` 模板的子特征）；读不到用 `blocks / count` |
 | `count` | 实例数：可疑方块按 `LANDMARK_CLUSTER_RADIUS`（当前 8 格）聚类后的组数（实测） |
 | `blocksPerStart` / `containersPerStart` | 每处平均可疑方块数 / 容器数（分母 `count`）；沙漠水井容器为 0 |
 | `containers` | 该地标的容器计数（沙漠水井为空对象） |
@@ -264,17 +278,19 @@
 `starts` 是聚类实例数、`blocks` 是可疑方块数、`containers` 是容器数、`nearest` 是实例中心的最近邻分布。
 这样下游的 `structure_content` 不用为地标单开一条读取路径。
 
+方块实体可能落在片段 BB 之外（例如海洋废墟的可疑方块与箱子贴着海床下移，落到包围盒下方），按距离补归属：距离最近结构 ≤12 格就归给它；刷怪笼的上限更紧（≤4 格，结构不会把刷怪笼放到十几格外），超出这个范围的结构外刷怪笼就是**地牢（monster room）**的锚点——它 8 格内的容器归入同一间地牢。
+
 容器与战利品表的归属顺序：
 
 1. 地牢锚点 8 格内 → 归地牢（`chests/simple_dungeon` 与矿井共用，必须先判地牢）
-2. 战利品表能对应到某种结构 → 在该结构的实例里取最近的，不因别的结构更近而算错
+2. 战利品表能对应到某种结构 → 在该结构的实例里取最近的（`minecraft:ocean_ruin_cold` 按前缀 `ocean_ruin` 命中），不因别的结构更近而算错
 3. 表未收录或被多种结构共用 → 退回 12 格内最近结构
 4. 仍无归属 → `unassigned`；若表指向的结构本范围内没有实例 → `missingOwnerLoot`
 
 关键是第 2 步：表由结构模板与 processor 决定，是数据事实。海底神殿没有战利品箱，
 而海洋废墟的箱子可能落在神殿的包围盒内，按距离会把这些箱子算给神殿。
 
-容器两种分母回答不同问题：`containersPerStart` 是「专程去一处能开几个」，`containersPerCoveredChunk` 是「游荡撞见时每区块能开几个」。两者相差每处平均覆盖区块数倍，大结构可达 30 倍，不可混用。
+容器两种分母回答不同问题：`containersPerStart` 是「专程去一处能开几个」，`containersPerCoveredChunk` 是「游荡撞见时每区块能开几个」。两者相差每处平均覆盖区块数倍，大结构可达数十倍，小结构接近相等，不可混用。
 
 ## structure-spacing
 
