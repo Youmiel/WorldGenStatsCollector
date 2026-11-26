@@ -713,7 +713,7 @@ const analyzer: AnalyzerModule = {
         // token 全局递增，mask 里的旧 token 永远小于新 token，所以只需清映射表
         tokenOwner.clear()
         worldDir = worldDir || ctx.runtime.worldDir
-        setIndexPromise ??= loadStructureSets(ctx.runtime.serverJar)
+        setIndexPromise ??= loadStructureSets(ctx.runtime.serverJar, ctx.runtime.worldDir)
         setIndex ??= await setIndexPromise
 
         const nbt = await c.rawNbt(["structures"])
