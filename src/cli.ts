@@ -8,6 +8,7 @@ import { installMods } from "./lib/mods.js"
 import { ensureDir, exists, log, setLogLevel } from "./lib/util.js"
 import { MinecraftServer, dimensionDirs, tuneC2me, tuneChunky, vanillaServerJar, writeServerConfigs } from "./lib/server.js"
 import { runPregen } from "./lib/pregen.js"
+import { ensureWorldgenReports } from "./lib/datagen.js"
 import { ensureSeed } from "./lib/seed.js"
 import { productionNames, resolveAnalyzers } from "./analyze/registry.js"
 import { describeArea } from "./analyze/range.js"
@@ -245,6 +246,7 @@ async function cmdAnalyze(cfg: Config): Promise<void> {
     .join(" | ")
   log.info(`统计范围：${areaDesc}`)
   const serverJar = await vanillaServerJar(srvDir, cfg.minecraft.version)
+  await ensureWorldgenReports(srvDir, serverJar, cfg.server.javaPath)
   const target = await buildTarget({ cfg, serverDir: srvDir, worldDir, serverJar })
   const results = await runAnalysis({ cfg, worldDir, outDir, areas, serverJar, target }, modules)
 

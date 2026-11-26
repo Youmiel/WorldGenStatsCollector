@@ -69,7 +69,7 @@ const analyzer: AnalyzerModule = {
     let warnedNoJar = false
 
     const ensureIndex = (ctx: AnalyzerContext) => {
-      indexPromise ??= loadStructureSets(ctx.runtime.serverJar)
+      indexPromise ??= loadStructureSets(ctx.runtime.serverJar, ctx.runtime.worldDir)
       return indexPromise
     }
 
